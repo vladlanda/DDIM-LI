@@ -312,17 +312,13 @@ def make_dataloaders(
     This is the correct approach for time-series data: you must never
     let future frames leak into the training set via random shuffling.
 
-    val_roots (your held-out test regions) are NOT touched here.
+    test_roots (your held-out regions) are NOT touched here.
     Use make_test_loader() after training for final evaluation on those.
     """
     assert 0.0 < train_val_split < 1.0, "train_val_split must be in (0, 1)"
 
-    # Build one dataset per region to get the full valid_starts list,
-    # then slice temporally before constructing the final split datasets.
-    train_starts_per_root: List[List] = []
-    val_starts_per_root:   List[List] = []
-
-    # First pass: build index + stats using all train_roots
+    # Build each region dataset once, then slice valid_starts in-place.
+    # No second construction pass — avoids duplicate index scanning and logs.
     full_ds = MultiRegionDataset(
         train_roots, channel_list=channel_list,
         T_in=T_in, T_out=T_out, img_size=img_size,
@@ -331,34 +327,30 @@ def make_dataloaders(
     )
     shared_stats = full_ds.datasets[0].stats
 
+    train_parts, val_parts = [], []
+
     for ds in full_ds.datasets:
         n       = len(ds.valid_starts)
         n_train = max(1, int(n * train_val_split))
-        # Temporal split: first n_train → train, remainder → val
-        train_starts_per_root.append(ds.valid_starts[:n_train])
-        val_starts_per_root.append(ds.valid_starts[n_train:])
+
+        # Train part: reuse the existing dataset object, slice its starts
+        train_ds = ds
+        train_ds.valid_starts = ds.valid_starts[:n_train]
+        train_ds.augment      = True
+        train_parts.append(train_ds)
+
+        # Val part: shallow-copy the dataset, give it the remaining starts
+        import copy
+        val_ds = copy.copy(ds)          # shares index/stats, no re-scan
+        val_ds.valid_starts = ds.valid_starts[n_train:]
+        val_ds.augment      = False
+        val_parts.append(val_ds)
+
         logger.info(
             f"  {ds.root}: {n} sequences → "
             f"{n_train} train / {n - n_train} val  "
             f"(split={train_val_split:.0%})"
         )
-
-    # Second pass: build split datasets by injecting pre-sliced valid_starts
-    train_parts, val_parts = [], []
-    for i, root in enumerate(train_roots):
-        for starts, augment, parts in [
-            (train_starts_per_root[i], True,  train_parts),
-            (val_starts_per_root[i],   False, val_parts),
-        ]:
-            if not starts:
-                continue
-            d = METSATDataset(
-                root, channel_list=channel_list,
-                T_in=T_in, T_out=T_out, img_size=img_size,
-                stats=shared_stats, augment=augment,
-            )
-            d.valid_starts = starts   # inject the pre-sliced list
-            parts.append(d)
 
     class _ConcatDS(Dataset):
         def __init__(self, datasets):
@@ -371,17 +363,20 @@ def make_dataloaders(
             ds_idx = int(np.searchsorted(self.cumlen[1:], idx, side="right"))
             return self.datasets[ds_idx][idx - self.cumlen[ds_idx]]
 
-    train_ds = _ConcatDS(train_parts)
-    val_ds   = _ConcatDS(val_parts)
+    train_combined = _ConcatDS(train_parts)
+    val_combined   = _ConcatDS(val_parts)
 
-    logger.info(f"Total — train: {len(train_ds)} sequences, val: {len(val_ds)} sequences")
+    logger.info(
+        f"Total — train: {len(train_combined)} sequences, "
+        f"val: {len(val_combined)} sequences"
+    )
 
     train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
+        train_combined, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True, drop_last=True,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
+        val_combined, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
     )
     return train_loader, val_loader, shared_stats
