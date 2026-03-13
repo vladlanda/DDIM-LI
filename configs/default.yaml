@@ -12,8 +12,8 @@
 # via train_val_split (temporal — no data leakage).
 train_roots:
   - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
+  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
+  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
 
 # Held-out regions — NEVER used during training.
 # Only passed to evaluate.py after training is complete.
@@ -38,7 +38,7 @@ img_size: [256, 256]
 # Set to a small integer (e.g. 50) to load only a subset of sequences.
 # Useful for quickly verifying the pipeline works before a full training run.
 # null = load everything (production default)
-max_samples: null
+max_samples: 100
 
 # ----------------------------------------------------------
 # Model architecture
@@ -67,7 +67,7 @@ sigma_max:  80.0
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
 epochs:         200
-batch_size:     4
+batch_size:     8
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0

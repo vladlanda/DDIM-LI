@@ -189,3 +189,14 @@ uv pip install -r requirements.txt --no-deps torch torchvision  # skip torch lin
 Or more cleanly, just add this to the top of `requirements.txt` once you know your CUDA version:
 ```
 --index-url https://download.pytorch.org/whl/cu121
+
+
+## Dual GPU 
+# 2 GPUs — recommended
+torchrun --nproc_per_node=2 train.py --config configs/default.yaml
+
+# Single GPU — still works unchanged
+python train.py --config configs/default.yaml
+
+# Resume DDP training
+torchrun --nproc_per_node=2 train.py --config configs/default.yaml --resume true
