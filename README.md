@@ -193,6 +193,13 @@ Or more cleanly, just add this to the top of `requirements.txt` once you know yo
 
 ## Dual GPU 
 # 2 GPUs — recommended
+chmod +x launch.sh
+
+./launch.sh                        # normal training
+./launch.sh --max_samples 50       # smoke test
+./launch.sh --resume true          # resume
+
+# Or
 torchrun --nproc_per_node=2 train.py --config configs/default.yaml
 
 # Single GPU — still works unchanged
