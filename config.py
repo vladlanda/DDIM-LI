@@ -69,13 +69,15 @@ def add_arguments(parser: argparse.ArgumentParser):
 
     # ---- Training ----
     parser.add_argument("--epochs",          type=int,   default=200)
-    parser.add_argument("--batch_size",      type=int,   default=4)
+    parser.add_argument("--batch_size",      type=int,   default=4,
+                        help="Per-GPU batch size. Effective batch = batch_size × num_gpus.")
     parser.add_argument("--lr",              type=float, default=1e-4)
     parser.add_argument("--weight_decay",    type=float, default=1e-4)
     parser.add_argument("--grad_clip",       type=float, default=1.0)
     parser.add_argument("--ema_decay",       type=float, default=0.9999)
     parser.add_argument("--amp",             type=_bool, default=True)
-    parser.add_argument("--num_workers",     type=int,   default=4)
+    parser.add_argument("--num_workers",     type=int,   default=4,
+                        help="DataLoader workers PER GPU.")
     parser.add_argument("--cfg_drop_prob",   type=float, default=0.15)
     parser.add_argument("--spectral_weight", type=float, default=0.1)
     parser.add_argument("--li_weight",       type=float, default=3.0)

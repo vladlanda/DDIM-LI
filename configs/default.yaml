@@ -62,14 +62,18 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
+# batch_size is PER GPU.
+# With 2 × RTX 5090 and batch_size=4 → effective batch = 8.
+# RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
+# depending on img_size and T_in/T_out.
 epochs:         200
 batch_size:     4
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
 ema_decay:      0.9999
-amp:            true       # mixed precision (fp16)
-num_workers:    4
+amp:            true       # mixed precision (bf16 preferred on Ada/Blackwell GPUs)
+num_workers:    4          # per GPU; total CPU workers = num_workers × num_gpus
 
 # Loss weights
 cfg_drop_prob:    0.15     # probability of nulling context (for CFG training)
@@ -86,4 +90,4 @@ cfg_scale:    1.5          # classifier-free guidance scale at inference
 
 output_dir:      outputs/run1
 resume:          false
-wandb_project:   ""        # set to your project name to enable WandB
+wandb_project:   "DDIM-LI"        # set to your project name to enable WandB
