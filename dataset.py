@@ -1,0 +1,314 @@
+"""
+Dataset for METSAT lightning nowcasting.
+
+File format: {id}_{start}_{end}_{channel}.jpg + .wld
+Channels:
+  - ir  : IR 105 (always present)
+  - li  : lightning index (always present)
+  - ch0 : BT 105 alias or other (optional)
+  - ch1 : BT 123 (optional)
+  - ch2 : BT 87  (optional)
+  - chN : up to ch9 (optional)
+
+A "sample" is a temporal sequence of T_in consecutive timesteps
+followed by T_out target timesteps.
+"""
+
+import os
+import re
+import json
+import logging
+from pathlib import Path
+from datetime import datetime, timedelta
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+logger = logging.getLogger(__name__)
+
+# -------------------------------------------------------------------
+# Constants
+# -------------------------------------------------------------------
+REQUIRED_CHANNELS = ["ir", "li"]
+OPTIONAL_CHANNELS = [f"ch{i}" for i in range(10)]
+ALL_CHANNELS = REQUIRED_CHANNELS + OPTIONAL_CHANNELS  # ir, li, ch0..ch9
+
+# Channel indices in the tensor (only channels present in dataset)
+CHANNEL_FILL_VALUES = {
+    "ir": 0.0,    # will be normalised anyway
+    "li": 0.0,    # sparse – missing = no lightning
+    **{f"ch{i}": 0.0 for i in range(10)},
+}
+
+
+# -------------------------------------------------------------------
+# Statistics (computed once, stored as JSON next to the dataset)
+# -------------------------------------------------------------------
+def compute_or_load_stats(
+    root: str,
+    channel_list: List[str],
+    stat_path: Optional[str] = None,
+    n_samples: int = 2000,
+) -> Dict[str, Dict[str, float]]:
+    """Return per-channel mean/std (or median/iqr for LI)."""
+    if stat_path and os.path.exists(stat_path):
+        with open(stat_path) as f:
+            return json.load(f)
+
+    logger.info("Computing dataset statistics …")
+    accum = defaultdict(list)
+    all_files = list(Path(root).rglob("*.jpg"))
+    np.random.shuffle(all_files)
+    for fp in all_files[:n_samples]:
+        ch = fp.stem.split("_")[-1]
+        if ch not in channel_list:
+            continue
+        img = np.array(Image.open(fp).convert("L"), dtype=np.float32) / 255.0
+        accum[ch].append(img.ravel())
+
+    stats = {}
+    for ch, arrays in accum.items():
+        flat = np.concatenate(arrays)
+        if ch == "li":
+            # LI is very sparse – use cube-root transform stats
+            flat = np.cbrt(flat)
+            stats[ch] = {"mean": float(flat.mean()), "std": float(flat.std() + 1e-6),
+                         "transform": "cbrt"}
+        else:
+            stats[ch] = {"mean": float(flat.mean()), "std": float(flat.std() + 1e-6),
+                         "transform": "linear"}
+
+    if stat_path:
+        with open(stat_path, "w") as f:
+            json.dump(stats, f, indent=2)
+    return stats
+
+
+def normalize(img: np.ndarray, stats: Dict, ch: str) -> np.ndarray:
+    if stats[ch]["transform"] == "cbrt":
+        img = np.cbrt(img)
+    return (img - stats[ch]["mean"]) / stats[ch]["std"]
+
+
+def denormalize(img: np.ndarray, stats: Dict, ch: str) -> np.ndarray:
+    img = img * stats[ch]["std"] + stats[ch]["mean"]
+    if stats[ch]["transform"] == "cbrt":
+        img = np.power(img, 3)
+    return img
+
+
+# -------------------------------------------------------------------
+# Timestamp parsing
+# -------------------------------------------------------------------
+TS_FMT = "%Y%m%dT%H%M%SZ"
+
+def parse_filename(path: Path) -> Optional[Tuple[str, datetime, datetime, str]]:
+    """Parse {id}_{start}_{end}_{channel}.jpg -> (id, start_dt, end_dt, channel)"""
+    name = path.stem
+    parts = name.rsplit("_", 3)
+    if len(parts) != 4:
+        return None
+    fid, start_s, end_s, ch = parts
+    try:
+        start_dt = datetime.strptime(start_s, TS_FMT)
+        end_dt   = datetime.strptime(end_s,   TS_FMT)
+    except ValueError:
+        return None
+    return fid, start_dt, end_dt, ch
+
+
+# -------------------------------------------------------------------
+# Index builder
+# -------------------------------------------------------------------
+def build_index(root: str) -> Dict[datetime, Dict[str, Path]]:
+    """
+    Returns: { start_dt: { channel: Path, ... }, ... }
+    Only timesteps that have BOTH ir AND li are included.
+    """
+    raw = defaultdict(dict)
+    for fp in Path(root).rglob("*.jpg"):
+        parsed = parse_filename(fp)
+        if parsed is None:
+            continue
+        _, start_dt, _, ch = parsed
+        raw[start_dt][ch] = fp
+
+    index = {dt: chs for dt, chs in raw.items()
+             if all(c in chs for c in REQUIRED_CHANNELS)}
+    return index
+
+
+# -------------------------------------------------------------------
+# Dataset
+# -------------------------------------------------------------------
+class METSATDataset(Dataset):
+    """
+    Each item is:
+        context : (T_in,  C, H, W)  – normalised input frames
+        target  : (T_out, C, H, W)  – normalised target residuals
+        lead_times: (T_out,)         – lead time in multiples of dt_min
+        mask    : (C,)               – 1 if channel present, 0 if filled
+
+    Residual target = target_frame - context_frame[-1]
+    """
+
+    def __init__(
+        self,
+        root: str,
+        channel_list: List[str],
+        T_in: int = 6,           # context frames
+        T_out: int = 36,         # 36 × 10 min = 6 hours
+        dt_min: int = 10,        # minutes between frames
+        img_size: Tuple[int,int] = (256, 256),
+        stats: Optional[Dict] = None,
+        stat_path: Optional[str] = None,
+        augment: bool = True,
+    ):
+        self.root        = root
+        self.channel_list = channel_list
+        self.C           = len(channel_list)
+        self.T_in        = T_in
+        self.T_out       = T_out
+        self.dt          = timedelta(minutes=dt_min)
+        self.dt_min      = dt_min
+        self.img_size    = img_size
+        self.augment     = augment
+
+        # Build temporal index
+        self.index = build_index(root)
+        self.sorted_times = sorted(self.index.keys())
+
+        # Stats
+        self.stats = stats or compute_or_load_stats(
+            root, channel_list, stat_path=stat_path
+        )
+
+        # Build valid sequence start indices
+        self.valid_starts = self._build_valid_starts()
+        logger.info(f"Dataset '{root}': {len(self.valid_starts)} valid sequences")
+
+    def _build_valid_starts(self) -> List[datetime]:
+        seq_len = self.T_in + self.T_out
+        valid = []
+        time_set = set(self.sorted_times)
+        for t in self.sorted_times:
+            seq = [t + i * self.dt for i in range(seq_len)]
+            if all(s in time_set for s in seq):
+                valid.append(t)
+        return valid
+
+    def __len__(self):
+        return len(self.valid_starts)
+
+    def _load_frame(self, dt: datetime) -> Tuple[np.ndarray, np.ndarray]:
+        """Returns (C, H, W) normalised frame and (C,) mask."""
+        chs = self.index[dt]
+        h, w = self.img_size
+        frame = np.zeros((self.C, h, w), dtype=np.float32)
+        mask  = np.zeros(self.C, dtype=np.float32)
+
+        for i, ch in enumerate(self.channel_list):
+            if ch in chs:
+                img = Image.open(chs[ch]).convert("L").resize((w, h), Image.BILINEAR)
+                arr = np.array(img, dtype=np.float32) / 255.0
+                if ch in self.stats:
+                    arr = normalize(arr, self.stats, ch)
+                else:
+                    arr = (arr - 0.5) / 0.5
+                frame[i] = arr
+                mask[i]  = 1.0
+            else:
+                frame[i] = CHANNEL_FILL_VALUES.get(ch, 0.0)
+                mask[i]  = 0.0
+
+        return frame, mask
+
+    def __getitem__(self, idx):
+        t0 = self.valid_starts[idx]
+        times = [t0 + i * self.dt for i in range(self.T_in + self.T_out)]
+
+        frames, masks = zip(*[self._load_frame(t) for t in times])
+        frames = np.stack(frames)  # (T_in+T_out, C, H, W)
+        masks  = np.stack(masks)   # (T_in+T_out, C)
+
+        context = frames[:self.T_in]                     # (T_in, C, H, W)
+        target_abs = frames[self.T_in:]                  # (T_out, C, H, W)
+
+        # Residual: target - last context frame
+        last_ctx = context[-1:]                          # (1, C, H, W)
+        target_residual = target_abs - last_ctx          # (T_out, C, H, W)
+
+        lead_times = np.arange(1, self.T_out + 1, dtype=np.float32)  # [1..T_out] × dt_min
+
+        # Random horizontal flip augmentation
+        if self.augment and np.random.rand() > 0.5:
+            context         = context[:, :, :, ::-1].copy()
+            target_residual = target_residual[:, :, :, ::-1].copy()
+
+        return {
+            "context":    torch.from_numpy(context),
+            "target":     torch.from_numpy(target_residual),
+            "lead_times": torch.from_numpy(lead_times),
+            "ctx_mask":   torch.from_numpy(masks[:self.T_in]),
+            "tgt_mask":   torch.from_numpy(masks[self.T_in:]),
+            "last_ctx":   torch.from_numpy(last_ctx[0]),   # (C,H,W) for denorm at inference
+        }
+
+
+# -------------------------------------------------------------------
+# Multi-region concatenated dataset
+# -------------------------------------------------------------------
+class MultiRegionDataset(Dataset):
+    def __init__(self, roots: List[str], **kwargs):
+        self.datasets = [METSATDataset(r, **kwargs) for r in roots]
+        self.lengths  = [len(d) for d in self.datasets]
+        self.cumlen   = np.cumsum([0] + self.lengths)
+
+    def __len__(self):
+        return self.cumlen[-1]
+
+    def __getitem__(self, idx):
+        ds_idx = np.searchsorted(self.cumlen[1:], idx, side="right")
+        local  = idx - self.cumlen[ds_idx]
+        return self.datasets[ds_idx][local]
+
+
+# -------------------------------------------------------------------
+# DataModule helper
+# -------------------------------------------------------------------
+def make_dataloaders(
+    train_roots: List[str],
+    val_roots:   List[str],
+    channel_list: List[str],
+    T_in: int = 6,
+    T_out: int = 36,
+    img_size: Tuple[int,int] = (256, 256),
+    batch_size: int = 4,
+    num_workers: int = 4,
+    stat_path: Optional[str] = None,
+):
+    # Fit stats on training set only
+    train_ds = MultiRegionDataset(
+        train_roots, channel_list=channel_list,
+        T_in=T_in, T_out=T_out, img_size=img_size,
+        stat_path=stat_path, augment=True,
+    )
+    val_ds = MultiRegionDataset(
+        val_roots, channel_list=channel_list,
+        T_in=T_in, T_out=T_out, img_size=img_size,
+        stats=train_ds.datasets[0].stats,  # reuse train stats
+        augment=False,
+    )
+    train_loader = DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True,
+        num_workers=num_workers, pin_memory=True, drop_last=True,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )
+    return train_loader, val_loader, train_ds.datasets[0].stats

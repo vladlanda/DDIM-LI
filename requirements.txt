@@ -1,0 +1,32 @@
+# ============================================================
+# METSAT Lightning Nowcasting — Python 3.11
+# ============================================================
+# Setup:
+#   uv venv .venv --python 3.11
+#   source .venv/bin/activate        # Linux/macOS
+#   .venv\Scripts\activate           # Windows
+#   uv pip install -r requirements.txt
+
+# Core
+torch==2.3.1
+torchvision==0.18.1
+numpy==1.26.4
+pillow==10.3.0
+
+# Model
+einops==0.8.0
+
+# Config
+pyyaml==6.0.1
+
+# Evaluation
+scikit-image==0.23.2
+scipy==1.13.1
+
+# Logging (optional but recommended)
+wandb==0.17.3
+tqdm==4.66.4
+
+# Dev / notebook
+matplotlib==3.9.0
+ipykernel==6.29.4
