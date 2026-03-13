@@ -43,6 +43,9 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--T_out",       type=int,   default=36)
     parser.add_argument("--dt_min",      type=int,   default=10)
     parser.add_argument("--img_size",    nargs=2,    type=int, default=[256, 256])
+    parser.add_argument("--max_samples", type=int,   default=None,
+                        help="Limit sequences per dataset split (None = full dataset). "
+                             "Use a small number (e.g. 50) for a quick smoke test.")
 
     # ---- Model ----
     parser.add_argument("--base_channels",     type=int,   default=128)

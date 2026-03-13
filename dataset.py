@@ -167,16 +167,18 @@ class METSATDataset(Dataset):
         stats: Optional[Dict] = None,
         stat_path: Optional[str] = None,
         augment: bool = True,
+        max_samples: Optional[int] = None,   # limit sequences for fast testing
     ):
-        self.root        = root
+        self.root         = root
         self.channel_list = channel_list
-        self.C           = len(channel_list)
-        self.T_in        = T_in
-        self.T_out       = T_out
-        self.dt          = timedelta(minutes=dt_min)
-        self.dt_min      = dt_min
-        self.img_size    = img_size
-        self.augment     = augment
+        self.C            = len(channel_list)
+        self.T_in         = T_in
+        self.T_out        = T_out
+        self.dt           = timedelta(minutes=dt_min)
+        self.dt_min       = dt_min
+        self.img_size     = img_size
+        self.augment      = augment
+        self.max_samples  = max_samples
 
         # Build temporal index
         self.index = build_index(root)
@@ -189,7 +191,16 @@ class METSATDataset(Dataset):
 
         # Build valid sequence start indices
         self.valid_starts = self._build_valid_starts()
-        logger.info(f"Dataset '{root}': {len(self.valid_starts)} valid sequences")
+
+        if max_samples is not None and max_samples < len(self.valid_starts):
+            # Evenly spaced subset so we sample across the full time range,
+            # not just the first N (which could be a single storm event)
+            step = len(self.valid_starts) // max_samples
+            self.valid_starts = self.valid_starts[::step][:max_samples]
+            logger.info(f"Dataset '{root}': {len(self.valid_starts)} sequences "
+                        f"(capped at max_samples={max_samples})")
+        else:
+            logger.info(f"Dataset '{root}': {len(self.valid_starts)} valid sequences")
 
     def _build_valid_starts(self) -> List[datetime]:
         seq_len = self.T_in + self.T_out
@@ -290,18 +301,21 @@ def make_dataloaders(
     batch_size: int = 4,
     num_workers: int = 4,
     stat_path: Optional[str] = None,
+    max_samples: Optional[int] = None,   # None = full dataset
 ):
     # Fit stats on training set only
     train_ds = MultiRegionDataset(
         train_roots, channel_list=channel_list,
         T_in=T_in, T_out=T_out, img_size=img_size,
         stat_path=stat_path, augment=True,
+        max_samples=max_samples,
     )
     val_ds = MultiRegionDataset(
         val_roots, channel_list=channel_list,
         T_in=T_in, T_out=T_out, img_size=img_size,
         stats=train_ds.datasets[0].stats,  # reuse train stats
         augment=False,
+        max_samples=max_samples,
     )
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,

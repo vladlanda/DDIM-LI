@@ -109,6 +109,7 @@ def train(args):
         batch_size   = args.batch_size,
         num_workers  = args.num_workers,
         stat_path    = stat_path,
+        max_samples  = args.max_samples,
     )
 
     # ----- Model -----
@@ -127,8 +128,7 @@ def train(args):
     # ----- Optimiser -----
     opt     = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     sched   = CosineAnnealingLR(opt, T_max=args.epochs, eta_min=args.lr * 0.01)
-    # scaler  = GradScaler(enabled=args.amp)
-    scaler  = GradScaler(device,enabled=args.amp)
+    scaler  = GradScaler(enabled=args.amp)
 
     # ----- Resume -----
     start_epoch = 0
@@ -156,7 +156,7 @@ def train(args):
         for step, batch in enumerate(train_loader):
             opt.zero_grad(set_to_none=True)
 
-            with autocast(device,enabled=args.amp):
+            with autocast(enabled=args.amp):
                 loss = edm_training_loss(
                     denoiser      = model,
                     schedule      = schedule,
