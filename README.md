@@ -169,3 +169,23 @@ If predictions are still blurry, check in this order:
    process is collapsing; increase `num_steps` at inference or lower `sigma_min`
 6. **Does context give no information at 6h?** → Normal! Evaluate with CRPS
    against climatology baseline, not against perfect determinism
+
+
+## Environment Setup
+# 1. Create the venv
+uv venv .venv --python 3.11
+
+# 2. Activate it
+source .venv/bin/activate        # Linux/macOS
+.venv\Scripts\activate           # Windows
+
+# 3. Install
+uv pip install -r requirements.txt
+# Instead of step 3, for CUDA 12.1:
+uv pip install torch==2.3.1 torchvision==0.18.1 --index-url https://download.pytorch.org/whl/cu121
+uv pip install -r requirements.txt --no-deps torch torchvision  # skip torch lines already installed
+```
+
+Or more cleanly, just add this to the top of `requirements.txt` once you know your CUDA version:
+```
+--index-url https://download.pytorch.org/whl/cu121

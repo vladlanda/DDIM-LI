@@ -126,156 +126,179 @@ class Upsample(nn.Module):
 
 class UNet(nn.Module):
     """
-    Conditioned U-Net that denoises a (T_out, C, H, W) stack of residuals.
+    Conditioned U-Net that denoises a (B, C_in, H, W) tensor.
 
-    Input channels per timestep:
-      - noisy_residual: C channels
-      - context (concatenated): T_in * C channels
-      - channel_mask:           C channels (binary)
-    Total input channels = C + T_in*C + C = C*(T_in+2)
+    Architecture built with fully explicit channel accounting:
+      - enc_plan  : list of (type, in_ch, out_ch)  built at __init__
+      - dec_plan  : same for decoder
+    The forward pass replays these plans, so there is zero ambiguity
+    about tensor sizes at any point.
 
-    The model flattens T_out into the batch dimension (one forward pass
-    per target step, or all at once with batch trick).
-
-    For multi-step direct prediction we process each lead step with a
-    SHARED network but different lead-time embeddings — parameter efficient.
+    Input layout (channels concatenated):
+      [noisy_residual | context_frames | channel_mask]
+      = C + T_in*C + C  =  C*(T_in+2)  total channels
     """
 
     def __init__(
         self,
-        in_channels:    int,   # C * (T_in + 2)  noisy + context + mask
-        out_channels:   int,   # C
-        base_channels:  int = 128,
-        channel_mults:  tuple = (1, 2, 3, 4),
-        num_res_blocks: int = 2,
+        in_channels:      int,
+        out_channels:     int,
+        base_channels:    int   = 128,
+        channel_mults:    tuple = (1, 2, 3, 4),
+        num_res_blocks:   int   = 2,
         attn_resolutions: tuple = (16, 8),
-        dropout:        float = 0.1,
-        emb_dim:        int = 512,
-        num_groups:     int = 8,
+        dropout:          float = 0.1,
+        emb_dim:          int   = 512,
+        num_groups:       int   = 8,
     ):
         super().__init__()
-        self.emb_dim = emb_dim
+        self.emb_dim   = emb_dim
+        self.num_groups = num_groups
+        attn_res = set(attn_resolutions)
 
-        # Noise sigma embedding
-        self.sigma_emb = nn.Sequential(
-            nn.Linear(emb_dim, emb_dim),
-            nn.SiLU(),
-            nn.Linear(emb_dim, emb_dim),
-        )
-        # Lead-time embedding (1..T_out multiples of dt_min)
-        self.lead_emb = nn.Sequential(
-            nn.Linear(emb_dim, emb_dim),
-            nn.SiLU(),
-            nn.Linear(emb_dim, emb_dim),
-        )
-        # Channel mask embedding
-        self.mask_emb = nn.Sequential(
-            nn.Linear(out_channels, emb_dim // 4),
-            nn.SiLU(),
+        # ── Conditioning embeddings ─────────────────────────────────
+        def mlp(d): return nn.Sequential(nn.Linear(d, d), nn.SiLU(), nn.Linear(d, d))
+        self.sigma_emb = mlp(emb_dim)
+        self.lead_emb  = mlp(emb_dim)
+        self.mask_emb  = nn.Sequential(
+            nn.Linear(out_channels, emb_dim // 4), nn.SiLU(),
             nn.Linear(emb_dim // 4, emb_dim),
         )
-        # Total conditioning: sigma + lead + mask
-        total_emb = emb_dim * 3
-        self.emb_proj = nn.Sequential(
-            nn.Linear(total_emb, emb_dim),
-            nn.SiLU(),
-        )
+        self.emb_proj = nn.Sequential(nn.Linear(emb_dim * 3, emb_dim), nn.SiLU())
 
-        ch = base_channels
-        self.input_conv = nn.Conv2d(in_channels, ch, 3, padding=1)
+        # ── Input projection ────────────────────────────────────────
+        self.input_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
-        # Encoder
-        self.down_blocks  = nn.ModuleList()
-        self.down_samples = nn.ModuleList()
-        encoder_chs = [ch]
-        img_size = 256  # tracked symbolically for attn decision
+        # ── Build encoder plan ──────────────────────────────────────
+        # Each entry is a dict describing one operation:
+        #   {"type": "res",   "in": x, "out": y}
+        #   {"type": "attn",  "ch":  x}
+        #   {"type": "down",  "ch":  x}
+        enc_plan: list[dict] = []
+        skip_channels: list[int] = []   # ch pushed onto skip stack per res/attn block
+        ch  = base_channels
+        res = 256
 
         for level, mult in enumerate(channel_mults):
             out_ch = base_channels * mult
             for _ in range(num_res_blocks):
-                self.down_blocks.append(ResBlock(ch, out_ch, emb_dim, dropout, num_groups))
+                enc_plan.append({"type": "res", "in": ch, "out": out_ch})
                 ch = out_ch
-                encoder_chs.append(ch)
-                if img_size in attn_resolutions:
-                    self.down_blocks.append(SelfAttention2D(ch))
-                    encoder_chs.append(ch)  # dummy; we track per-resblock
+                skip_channels.append(ch)
+                if res in attn_res:
+                    enc_plan.append({"type": "attn", "ch": ch})
+                    skip_channels.append(ch)
             if level < len(channel_mults) - 1:
-                self.down_samples.append(Downsample(ch))
-                encoder_chs.append(ch)
-                img_size //= 2
+                enc_plan.append({"type": "down", "ch": ch})
+                res //= 2
 
-        # Bottleneck
-        self.mid1 = ResBlock(ch, ch, emb_dim, dropout, num_groups)
-        self.mid_attn = SelfAttention2D(ch)
-        self.mid2 = ResBlock(ch, ch, emb_dim, dropout, num_groups)
-
-        # Decoder (mirror encoder, with skip cats)
-        self.up_blocks  = nn.ModuleList()
-        self.up_samples = nn.ModuleList()
+        # ── Build decoder plan (mirror, with skip cats) ─────────────
+        dec_plan: list[dict] = []
+        skips_copy = list(skip_channels)   # copy; pop from end
 
         for level, mult in reversed(list(enumerate(channel_mults))):
             out_ch = base_channels * mult
-            for i in range(num_res_blocks + 1):
-                skip_ch = encoder_chs.pop()
-                self.up_blocks.append(ResBlock(ch + skip_ch, out_ch, emb_dim, dropout, num_groups))
+            for _ in range(num_res_blocks):
+                skip_ch = skips_copy.pop()
+                dec_plan.append({"type": "res", "in": ch + skip_ch, "out": out_ch})
                 ch = out_ch
-                if img_size in attn_resolutions:
-                    self.up_blocks.append(SelfAttention2D(ch))
+                if res in attn_res:
+                    skip_ch2 = skips_copy.pop()   # attn skip (same ch, no transform)
+                    dec_plan.append({"type": "attn", "ch": ch})
             if level > 0:
-                self.up_samples.append(Upsample(ch))
-                img_size *= 2
+                dec_plan.append({"type": "up", "ch": ch})
+                res *= 2
 
-        self.out_norm = nn.GroupNorm(num_groups, ch)
-        self.out_conv = nn.Conv2d(ch, out_channels, 1)
+        # ── Instantiate modules from plans ──────────────────────────
+        self.enc_blocks = nn.ModuleList()
+        for p in enc_plan:
+            if p["type"] == "res":
+                self.enc_blocks.append(ResBlock(p["in"], p["out"], emb_dim, dropout, num_groups))
+            elif p["type"] == "attn":
+                self.enc_blocks.append(SelfAttention2D(p["ch"], num_heads=max(1, p["ch"] // 64)))
+            elif p["type"] == "down":
+                self.enc_blocks.append(Downsample(p["ch"]))
+        self.enc_plan = enc_plan
 
+        bot_ch = ch  # channel count entering bottleneck (= ch after last enc level)
+        # recompute: ch was mutated above; trust dec_plan entry[0] in_ch - skip
+        # Actually bot_ch is the ch value right before we started the dec_plan loop,
+        # which equals the ch value after the last enc level's last resblock.
+        # We can read it from enc_plan safely:
+        for p in reversed(enc_plan):
+            if p["type"] == "res":
+                bot_ch = p["out"]; break
+
+        self.mid1     = ResBlock(bot_ch, bot_ch, emb_dim, dropout, num_groups)
+        self.mid_attn = SelfAttention2D(bot_ch, num_heads=max(1, bot_ch // 64))
+        self.mid2     = ResBlock(bot_ch, bot_ch, emb_dim, dropout, num_groups)
+
+        self.dec_blocks = nn.ModuleList()
+        for p in dec_plan:
+            if p["type"] == "res":
+                self.dec_blocks.append(ResBlock(p["in"], p["out"], emb_dim, dropout, num_groups))
+            elif p["type"] == "attn":
+                self.dec_blocks.append(SelfAttention2D(p["ch"], num_heads=max(1, p["ch"] // 64)))
+            elif p["type"] == "up":
+                self.dec_blocks.append(Upsample(p["ch"]))
+        self.dec_plan = dec_plan
+
+        # Final out channels = last res out in dec_plan
+        final_ch = bot_ch
+        for p in dec_plan:
+            if p["type"] == "res":
+                final_ch = p["out"]
+
+        self.out_norm = nn.GroupNorm(num_groups, final_ch)
+        self.out_conv = nn.Conv2d(final_ch, out_channels, 1)
+
+    # ── Forward ─────────────────────────────────────────────────────
     def forward(
         self,
-        x:         torch.Tensor,   # (B, C*(T_in+2), H, W)  noisy+context+mask
-        sigma:     torch.Tensor,   # (B,)  noise level
-        lead_time: torch.Tensor,   # (B,)  lead time scalar
-        ch_mask:   torch.Tensor,   # (B, C_out)  channel presence mask
+        x:         torch.Tensor,   # (B, in_channels, H, W)
+        sigma:     torch.Tensor,   # (B,)
+        lead_time: torch.Tensor,   # (B,)
+        ch_mask:   torch.Tensor,   # (B, out_channels)
     ) -> torch.Tensor:
 
-        # Build conditioning embedding
-        sigma_e = self.sigma_emb(timestep_embedding(sigma, self.emb_dim))
-        lead_e  = self.lead_emb(timestep_embedding(lead_time, self.emb_dim))
-        mask_e  = self.mask_emb(ch_mask)
+        # Conditioning embedding
+        sigma_e = self.sigma_emb(timestep_embedding(sigma,     self.emb_dim))
+        lead_e  = self.lead_emb( timestep_embedding(lead_time, self.emb_dim))
+        mask_e  = self.mask_emb(ch_mask.float())
         emb     = self.emb_proj(torch.cat([sigma_e, lead_e, mask_e], dim=-1))
 
-        # U-Net forward
-        h = self.input_conv(x)
-        skips = [h]
+        # Encoder
+        h     = self.input_conv(x)
+        skips = []
 
-        down_idx = 0
-        for block in self.down_blocks:
-            if isinstance(block, ResBlock):
+        for block, plan in zip(self.enc_blocks, self.enc_plan):
+            if plan["type"] == "res":
                 h = block(h, emb)
-            else:  # SelfAttention
+                skips.append(h)
+            elif plan["type"] == "attn":
                 h = block(h)
-            skips.append(h)
+                skips.append(h)
+            elif plan["type"] == "down":
+                h = block(h)          # no skip pushed for downsamples
 
-        # pop the extra append after each downsample
-        sample_idx = 0
-        # Redo with correct structure
-        # (simplified: rebuild cleanly below)
+        # Bottleneck
         h = self.mid1(h, emb)
         h = self.mid_attn(h)
         h = self.mid2(h, emb)
 
-        up_attn_set = set()
-        for block in self.up_blocks:
-            if isinstance(block, ResBlock):
+        # Decoder
+        for block, plan in zip(self.dec_blocks, self.dec_plan):
+            if plan["type"] == "res":
                 s = skips.pop()
-                # handle size mismatch at boundaries
                 if h.shape[-2:] != s.shape[-2:]:
                     h = F.interpolate(h, size=s.shape[-2:], mode="nearest")
                 h = torch.cat([h, s], dim=1)
                 h = block(h, emb)
-            else:
+            elif plan["type"] == "attn":
+                s = skips.pop()       # consume matching attn skip
                 h = block(h)
-
-        for up in self.up_samples:
-            h = up(h)
+            elif plan["type"] == "up":
+                h = block(h)
 
         h = F.silu(self.out_norm(h))
         return self.out_conv(h)

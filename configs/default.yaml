@@ -9,12 +9,12 @@
 # Data
 # ----------------------------------------------------------
 train_roots:
-  - datasets/central_africa_1
-  - datasets/central_africa_2
-  - datasets/central_africa_3
+  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
+  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
+  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
 
 val_roots:
-  - datasets/central_africa_4
+  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
 
 channels:           # order matters: index 0=ir, 1=li, 2=ch1, 3=ch2
   - ir
@@ -26,7 +26,7 @@ channels:           # order matters: index 0=ir, 1=li, 2=ch1, 3=ch2
 T_in:    6          # context frames  (6 × 10 min = 1 hour)
 T_out:   36         # forecast steps  (36 × 10 min = 6 hours)
 dt_min:  10         # minutes between frames
-img_size: [256, 256]
+img_size: [32,32]
 
 # ----------------------------------------------------------
 # Model architecture
@@ -74,4 +74,4 @@ cfg_scale:    1.5          # classifier-free guidance scale at inference
 
 output_dir:      outputs/run1
 resume:          false
-wandb_project:   ""        # set to your project name to enable WandB
+wandb_project:   "DDIM-LI"        # set to your project name to enable WandB
