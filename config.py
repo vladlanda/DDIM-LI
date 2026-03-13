@@ -36,8 +36,13 @@ def add_arguments(parser: argparse.ArgumentParser):
                         help="Path to YAML config file. CLI args override YAML.")
 
     # ---- Data ----
-    parser.add_argument("--train_roots", nargs="+", default=None)
-    parser.add_argument("--val_roots",   nargs="+", default=None)
+    parser.add_argument("--train_roots",     nargs="+", default=None,
+                        help="Regions used for training (split into train/val internally).")
+    parser.add_argument("--test_roots",      nargs="+", default=None,
+                        help="Held-out regions for final evaluation only. Never seen during training.")
+    parser.add_argument("--train_val_split", type=float, default=0.7,
+                        help="Fraction of each region's sequences used for training. "
+                             "Remainder becomes the validation set. Split is temporal (not random).")
     parser.add_argument("--channels",    nargs="+", default=["ir", "li", "ch1", "ch2"])
     parser.add_argument("--T_in",        type=int,   default=6)
     parser.add_argument("--T_out",       type=int,   default=36)

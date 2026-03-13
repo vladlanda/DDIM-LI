@@ -289,34 +289,93 @@ class MultiRegionDataset(Dataset):
 
 
 # -------------------------------------------------------------------
-# DataModule helper
+# DataModule helpers
 # -------------------------------------------------------------------
+
 def make_dataloaders(
-    train_roots: List[str],
-    val_roots:   List[str],
-    channel_list: List[str],
-    T_in: int = 6,
-    T_out: int = 36,
-    img_size: Tuple[int,int] = (256, 256),
-    batch_size: int = 4,
-    num_workers: int = 4,
-    stat_path: Optional[str] = None,
-    max_samples: Optional[int] = None,   # None = full dataset
+    train_roots:     List[str],
+    channel_list:    List[str],
+    T_in:            int   = 6,
+    T_out:           int   = 36,
+    img_size:        Tuple[int, int] = (256, 256),
+    batch_size:      int   = 4,
+    num_workers:     int   = 4,
+    stat_path:       Optional[str] = None,
+    max_samples:     Optional[int] = None,
+    train_val_split: float = 0.7,
 ):
-    # Fit stats on training set only
-    train_ds = MultiRegionDataset(
+    """
+    Builds train and validation loaders from train_roots only.
+
+    The split is done TEMPORALLY per region — the first `train_val_split`
+    fraction of each region's sequences go to train, the rest to val.
+    This is the correct approach for time-series data: you must never
+    let future frames leak into the training set via random shuffling.
+
+    val_roots (your held-out test regions) are NOT touched here.
+    Use make_test_loader() after training for final evaluation on those.
+    """
+    assert 0.0 < train_val_split < 1.0, "train_val_split must be in (0, 1)"
+
+    # Build one dataset per region to get the full valid_starts list,
+    # then slice temporally before constructing the final split datasets.
+    train_starts_per_root: List[List] = []
+    val_starts_per_root:   List[List] = []
+
+    # First pass: build index + stats using all train_roots
+    full_ds = MultiRegionDataset(
         train_roots, channel_list=channel_list,
         T_in=T_in, T_out=T_out, img_size=img_size,
-        stat_path=stat_path, augment=True,
+        stat_path=stat_path, augment=False,
         max_samples=max_samples,
     )
-    val_ds = MultiRegionDataset(
-        val_roots, channel_list=channel_list,
-        T_in=T_in, T_out=T_out, img_size=img_size,
-        stats=train_ds.datasets[0].stats,  # reuse train stats
-        augment=False,
-        max_samples=max_samples,
-    )
+    shared_stats = full_ds.datasets[0].stats
+
+    for ds in full_ds.datasets:
+        n       = len(ds.valid_starts)
+        n_train = max(1, int(n * train_val_split))
+        # Temporal split: first n_train → train, remainder → val
+        train_starts_per_root.append(ds.valid_starts[:n_train])
+        val_starts_per_root.append(ds.valid_starts[n_train:])
+        logger.info(
+            f"  {ds.root}: {n} sequences → "
+            f"{n_train} train / {n - n_train} val  "
+            f"(split={train_val_split:.0%})"
+        )
+
+    # Second pass: build split datasets by injecting pre-sliced valid_starts
+    train_parts, val_parts = [], []
+    for i, root in enumerate(train_roots):
+        for starts, augment, parts in [
+            (train_starts_per_root[i], True,  train_parts),
+            (val_starts_per_root[i],   False, val_parts),
+        ]:
+            if not starts:
+                continue
+            d = METSATDataset(
+                root, channel_list=channel_list,
+                T_in=T_in, T_out=T_out, img_size=img_size,
+                stats=shared_stats, augment=augment,
+            )
+            d.valid_starts = starts   # inject the pre-sliced list
+            parts.append(d)
+
+    class _ConcatDS(Dataset):
+        def __init__(self, datasets):
+            self.datasets = datasets
+            self.lengths  = [len(d) for d in datasets]
+            self.cumlen   = np.cumsum([0] + self.lengths)
+        def __len__(self):
+            return int(self.cumlen[-1])
+        def __getitem__(self, idx):
+            ds_idx = int(np.searchsorted(self.cumlen[1:], idx, side="right"))
+            return self.datasets[ds_idx][idx - self.cumlen[ds_idx]]
+
+    train_ds = _ConcatDS(train_parts)
+    val_ds   = _ConcatDS(val_parts)
+
+    logger.info(f"Total — train: {len(train_ds)} sequences, val: {len(val_ds)} sequences")
+
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
         num_workers=num_workers, pin_memory=True, drop_last=True,
@@ -325,4 +384,32 @@ def make_dataloaders(
         val_ds, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
     )
-    return train_loader, val_loader, train_ds.datasets[0].stats
+    return train_loader, val_loader, shared_stats
+
+
+def make_test_loader(
+    test_roots:   List[str],
+    channel_list: List[str],
+    stats:        Dict,
+    T_in:         int   = 6,
+    T_out:        int   = 36,
+    img_size:     Tuple[int, int] = (256, 256),
+    batch_size:   int   = 4,
+    num_workers:  int   = 4,
+    max_samples:  Optional[int] = None,
+):
+    """
+    Loader for the held-out test regions (val_roots in the config).
+    Only call this after training is complete.
+    Stats must be passed in from the training set — never refit on test data.
+    """
+    test_ds = MultiRegionDataset(
+        test_roots, channel_list=channel_list,
+        T_in=T_in, T_out=T_out, img_size=img_size,
+        stats=stats, augment=False,
+        max_samples=max_samples,
+    )
+    return DataLoader(
+        test_ds, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )

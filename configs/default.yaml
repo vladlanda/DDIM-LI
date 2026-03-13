@@ -8,15 +8,23 @@
 # ----------------------------------------------------------
 # Data
 # ----------------------------------------------------------
+# Regions used for training. Internally split into train/val
+# via train_val_split (temporal — no data leakage).
 train_roots:
   - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
   - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
   - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
 
-val_roots:
+# Held-out regions — NEVER used during training.
+# Only passed to evaluate.py after training is complete.
+test_roots:
   - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
 
-channels:           # order matters: index 0=ir, 1=li, 2=ch1, 3=ch2
+# First 70% of each region's sequences → train, last 30% → val.
+# Split is temporal (chronological), not random.
+train_val_split: 0.7
+
+channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
   - ir
   - li
   - ch0
@@ -30,7 +38,7 @@ img_size: [256, 256]
 # Set to a small integer (e.g. 50) to load only a subset of sequences.
 # Useful for quickly verifying the pipeline works before a full training run.
 # null = load everything (production default)
-max_samples: 30
+max_samples: null
 
 # ----------------------------------------------------------
 # Model architecture
@@ -78,4 +86,4 @@ cfg_scale:    1.5          # classifier-free guidance scale at inference
 
 output_dir:      outputs/run1
 resume:          false
-wandb_project:   "DDIM-LI"        # set to your project name to enable WandB
+wandb_project:   ""        # set to your project name to enable WandB

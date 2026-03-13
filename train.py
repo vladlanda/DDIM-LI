@@ -6,10 +6,15 @@ Usage:
 
 Or minimal CLI:
     python train.py \
-        --train_roots datasets/africa_train/central_africa_1 datasets/africa_train/central_africa_2 \
-        --val_roots   datasets/africa_test \
-        --channels ir li ch1 ch2 \
+        --train_roots datasets/central_africa_1 datasets/central_africa_2 datasets/central_africa_3 \
+        --channels ir li ch0 ch1 \
         --T_in 6 --T_out 36 --epochs 200 --batch_size 4
+
+NOTE on data splits:
+  --train_roots   regions used for training; split internally into train/val
+                  via --train_val_split (default 0.7/0.3, temporal split)
+  --test_roots    held-out regions, never touched during training;
+                  used only in evaluate.py after training is complete
 """
 
 import argparse
@@ -100,16 +105,16 @@ def train(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     train_loader, val_loader, stats = make_dataloaders(
-        train_roots  = args.train_roots,
-        val_roots    = args.val_roots,
-        channel_list = channels,
-        T_in         = args.T_in,
-        T_out        = args.T_out,
-        img_size     = tuple(args.img_size),
-        batch_size   = args.batch_size,
-        num_workers  = args.num_workers,
-        stat_path    = stat_path,
-        max_samples  = args.max_samples,
+        train_roots      = args.train_roots,
+        channel_list     = channels,
+        T_in             = args.T_in,
+        T_out            = args.T_out,
+        img_size         = tuple(args.img_size),
+        batch_size       = args.batch_size,
+        num_workers      = args.num_workers,
+        stat_path        = stat_path,
+        max_samples      = args.max_samples,
+        train_val_split  = args.train_val_split,
     )
 
     # ----- Model -----
