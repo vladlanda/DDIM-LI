@@ -171,27 +171,25 @@ def evaluate_epoch(
     all_crps   = []
     all_csi    = []
     all_ss     = []
+    T_out      = model.T_out   # read from model — never depends on loop executing
 
     for batch_idx, batch in enumerate(val_loader):
         if batch_idx >= num_samples:
             break
 
-        context  = batch["context"].to(device)    # (B, T_in, C, H, W)
-        target   = batch["target"].to(device)     # (B, T_out, C, H, W)
-        ch_mask  = batch["tgt_mask"][:, 0].to(device)  # use first step mask (stable)
+        context  = batch["context"].to(device)
+        target   = batch["target"].to(device)
+        ch_mask  = batch["tgt_mask"][:, 0].to(device)
 
-        # Generate ensemble
         ens = generate_ensemble(
             model, context, ch_mask, device,
             n_members=n_members, cfg_scale=cfg_scale,
         )  # (B, M, T_out, C, H, W)
 
-        # Convert to numpy, denormalised
-        ens_np  = ens.cpu().numpy()   # (B, M, T_out, C, H, W)
-        tgt_np  = target.cpu().numpy()
+        ens_np = ens.cpu().numpy()
+        tgt_np = target.cpu().numpy()
 
         B = ens_np.shape[0]
-        T_out = ens_np.shape[2]
 
         for b in range(B):
             crps_per_step = []
@@ -199,38 +197,39 @@ def evaluate_epoch(
             ss_per_step   = []
 
             for t in range(T_out):
-                ens_t  = ens_np[b, :, t]   # (M, C, H, W)
-                tgt_t  = tgt_np[b, t]      # (C, H, W)
+                ens_t = ens_np[b, :, t]   # (M, C, H, W)
+                tgt_t = tgt_np[b, t]      # (C, H, W)
 
-                # CRPS averaged over all channels and pixels
-                crps = crps_energy(ens_t, tgt_t)
-                crps_per_step.append(crps)
+                crps_per_step.append(crps_energy(ens_t, tgt_t))
+                ss_per_step.append(spread_skill(ens_t, tgt_t))
 
-                # Spread-skill
-                ss = spread_skill(ens_t, tgt_t)
-                ss_per_step.append(ss)
-
-                # Lightning CSI
                 if li_idx is not None:
-                    ens_li    = ens_t[:, li_idx]           # (M, H, W)
-                    tgt_li    = tgt_t[li_idx]              # (H, W)
-                    pred_prob = (ens_li > li_threshold).mean(axis=0)  # ensemble fraction
+                    ens_li    = ens_t[:, li_idx]
+                    tgt_li    = tgt_t[li_idx]
+                    pred_prob = (ens_li > li_threshold).mean(axis=0)
                     obs_bin   = (tgt_li > li_threshold).astype(float)
                     ct        = lightning_contingency(pred_prob, obs_bin)
                     csi_per_step.append(ct["csi"])
 
             all_crps.append(crps_per_step)
+            all_ss.append(ss_per_step)
             if csi_per_step:
                 all_csi.append(csi_per_step)
-            all_ss.append(ss_per_step)
+
+    # Guard: return empty metrics if val_loader had no batches
+    if not all_crps:
+        logger.warning("evaluate_epoch: no batches evaluated — val loader may be empty.")
+        return {}
 
     all_crps = np.array(all_crps)   # (N, T_out)
-    metrics  = {
-        "crps_mean": float(all_crps.mean()),
-        "crps_1h":   float(all_crps[:, :6].mean()) if T_out >= 6 else float(all_crps.mean()),
-        "crps_3h":   float(all_crps[:, :18].mean()) if T_out >= 18 else float(all_crps.mean()),
-        "crps_6h":   float(all_crps[:, -1].mean()),
-        "spread_skill": float(np.array(all_ss).mean()),
+    all_ss   = np.array(all_ss)
+
+    metrics = {
+        "crps_mean":    float(all_crps.mean()),
+        "crps_1h":      float(all_crps[:, :6].mean())  if T_out >= 6  else float(all_crps.mean()),
+        "crps_3h":      float(all_crps[:, :18].mean()) if T_out >= 18 else float(all_crps.mean()),
+        "crps_6h":      float(all_crps[:, -1].mean()),
+        "spread_skill": float(all_ss.mean()),
     }
     if all_csi:
         all_csi = np.array(all_csi)

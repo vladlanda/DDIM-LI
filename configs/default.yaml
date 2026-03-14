@@ -11,14 +11,16 @@
 # Regions used for training. Internally split into train/val
 # via train_val_split (temporal — no data leakage).
 train_roots:
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
+  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/Cloud2Lightning/datasets/africa_train/central_africa_1
+  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
   # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
   # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
 
 # Held-out regions — NEVER used during training.
 # Only passed to evaluate.py after training is complete.
 test_roots:
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
+  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/Cloud2Lightning/datasets/africa_train/central_africa_2
+  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
 
 # First 70% of each region's sequences → train, last 30% → val.
 # Split is temporal (chronological), not random.
@@ -67,7 +69,7 @@ sigma_max:  80.0
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
 epochs:         200
-batch_size:     8
+batch_size:     10
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
@@ -88,6 +90,6 @@ val_samples:  5            # number of batches to evaluate on
 n_members:    10           # ensemble members during validation
 cfg_scale:    1.5          # classifier-free guidance scale at inference
 
-output_dir:      outputs/run1
+output_dir:      outputs/run_test
 resume:          false
 wandb_project:   "DDIM-LI"        # set to your project name to enable WandB

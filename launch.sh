@@ -25,8 +25,8 @@ export NCCL_P2P_DISABLE=0          # keep P2P on — PCIe P2P is still faster th
 export NCCL_IB_DISABLE=1           # no InfiniBand on a workstation
 export NCCL_SOCKET_IFNAME=lo       # use loopback for inter-process signalling
 
-# Reduces fragmentation in PyTorch's CUDA allocator
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Reduces fragmentation in PyTorch's CUDA allocator (replaces deprecated PYTORCH_CUDA_ALLOC_CONF)
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 echo "================================================"
 echo "  METSAT Lightning Nowcasting — DDP Training"

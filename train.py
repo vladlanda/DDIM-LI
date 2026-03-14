@@ -22,16 +22,28 @@ NOTE on batch_size:
 import logging
 import os
 import time
+import warnings
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
-from torch.amp import GradScaler, autocast          # replaces deprecated torch.cuda.amp.*
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+
+# Suppress the false-positive "step() before optimizer.step()" warning.
+# Our sched.step() is always called after all opt.step()s in the epoch —
+# PyTorch fires this warning when last_epoch is set on construction (resume)
+# before the first forward pass of the new process, which is not a real bug.
+warnings.filterwarnings(
+    "ignore",
+    message="Detected call of `lr_scheduler.step\\(\\)` before `optimizer.step\\(\\)`",
+    category=UserWarning,
+    module="torch.optim.lr_scheduler",
+)
 
 try:
     import wandb
@@ -243,30 +255,37 @@ def train(args):
         sigma_max = args.sigma_max,
     )
 
-    # ----- Optimiser -----
-    # Use the unwrapped model's parameters; DDP handles gradient sync automatically
+    # ----- Optimiser & scaler -----
     raw_model = model.module if isinstance(model, DDP) else model
     opt    = AdamW(raw_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    sched  = CosineAnnealingLR(opt, T_max=args.epochs, eta_min=args.lr * 0.01)
     scaler = GradScaler('cuda', enabled=args.amp)
 
-    # ----- Resume -----
+    # ----- Resume (load before building scheduler) -----
     start_epoch = 0
     best_val    = float("inf")
     ckpt_path   = os.path.join(args.output_dir, "latest.pt")
 
     if args.resume and os.path.exists(ckpt_path):
-        # All ranks load the same checkpoint; map to their own device
         ckpt = torch.load(ckpt_path, map_location=device)
         raw_model.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
-        sched.load_state_dict(ckpt["sched"])
         if main and ema is not None and "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
         start_epoch = ckpt["epoch"] + 1
         best_val    = ckpt.get("best_val", best_val)
         if main:
             logger.info(f"Resumed from epoch {start_epoch}")
+
+    # Build scheduler AFTER resume so last_epoch is set correctly.
+    # This prevents the "step() before optimizer.step()" false-positive warning.
+    sched = CosineAnnealingLR(
+        opt,
+        T_max    = args.epochs,
+        eta_min  = args.lr * 0.01,
+        last_epoch = start_epoch - 1,   # -1 means "not yet stepped"; >0 on resume
+    )
+    if args.resume and os.path.exists(ckpt_path) and "sched" in ckpt:
+        sched.load_state_dict(ckpt["sched"])
 
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
