@@ -1,0 +1,21 @@
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_setup.py:_flush():81] Current SDK version is 0.24.0
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_setup.py:_flush():81] Configure stats pid to 263362
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_init.py:setup_run_log_directory():717] Logging user logs to /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/wandb/run-20260314_093239-ajd2vv7y/logs/debug.log
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_init.py:setup_run_log_directory():718] Logging internal logs to /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/wandb/run-20260314_093239-ajd2vv7y/logs/debug-internal.log
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_init.py:init():844] calling init triggers
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_init.py:init():849] wandb.init called with sweep_config: {}
+config: {'config': 'configs/default.yaml', 'train_roots': ['/home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1'], 'test_roots': ['/home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2'], 'train_val_split': 0.7, 'channels': ['ir', 'li', 'ch0', 'ch1'], 'T_in': 6, 'T_out': 36, 'dt_min': 10, 'img_size': [256, 256], 'max_samples': 100, 'base_channels': 128, 'channel_mults': [1, 2, 3, 4], 'num_res_blocks': 2, 'attn_resolutions': [16, 8], 'dropout': 0.1, 'emb_dim': 512, 'sigma_data': 0.5, 'P_mean': -1.2, 'P_std': 1.2, 'sigma_min': 0.002, 'sigma_max': 80.0, 'epochs': 200, 'batch_size': 8, 'lr': 0.0001, 'weight_decay': 0.0001, 'grad_clip': 1.0, 'ema_decay': 0.9999, 'amp': True, 'num_workers': 4, 'cfg_drop_prob': 0.15, 'spectral_weight': 0.1, 'li_weight': 3.0, 'n_members': 10, 'cfg_scale': 1.5, 'val_every': 5, 'val_samples': 5, 'output_dir': 'outputs/run_test', 'resume': False, 'wandb_project': 'DDIM-LI', '_wandb': {}}
+2026-03-14 09:32:39,289 INFO    MainThread:263362 [wandb_init.py:init():892] starting backend
+2026-03-14 09:32:39,515 INFO    MainThread:263362 [wandb_init.py:init():895] sending inform_init request
+2026-03-14 09:32:39,524 INFO    MainThread:263362 [wandb_init.py:init():903] backend started and connected
+2026-03-14 09:32:39,526 INFO    MainThread:263362 [wandb_init.py:init():973] updated telemetry
+2026-03-14 09:32:39,534 INFO    MainThread:263362 [wandb_init.py:init():997] communicating run to backend with 90.0 second timeout
+2026-03-14 09:32:40,306 INFO    MainThread:263362 [wandb_init.py:init():1044] starting run threads in backend
+2026-03-14 09:32:40,377 INFO    MainThread:263362 [wandb_run.py:_console_start():2529] atexit reg
+2026-03-14 09:32:40,377 INFO    MainThread:263362 [wandb_run.py:_redirect():2377] redirect: wrap_raw
+2026-03-14 09:32:40,377 INFO    MainThread:263362 [wandb_run.py:_redirect():2446] Wrapping output streams.
+2026-03-14 09:32:40,377 INFO    MainThread:263362 [wandb_run.py:_redirect():2469] Redirects installed.
+2026-03-14 09:32:40,378 INFO    MainThread:263362 [wandb_init.py:init():1084] run started, returning control to user process
+2026-03-14 09:32:42,806 INFO    wandb-AsyncioManager-main:263362 [service_client.py:_forward_responses():80] Reached EOF.
+2026-03-14 09:32:42,806 INFO    wandb-AsyncioManager-main:263362 [mailbox.py:close():137] Closing mailbox, abandoning 1 handles.

@@ -1,0 +1,124 @@
+  Validation:   0%|                                                                                                                                              | 0/1 [01:22<?, ?batch/s]
+Epochs:   0%|                                                                                                                      | 0/200 [01:25<?, ?ep/s, loss=165261.3066, lr=1.00e-04]
+Traceback (most recent call last):
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 457, in <module>
+    train(args)
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 401, in train
+    val_metrics = evaluate_epoch(
+                  ^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 213, in evaluate_epoch
+    if chosen is not None and batch_idx not in chosen:
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 75, in generate_ensemble
+    leave        = False,
+           ^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 479, in edm_sampler
+    denoised_next = denoiser_fn(x_next, t_next_batch)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 69, in denoiser_fn
+    all_steps = []
+
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 380, in forward
+    return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 347, in forward
+    raw = self.unet(net_input, c_noise, lead_time, ch_mask)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 303, in forward
+    h = F.silu(self.out_norm(h))
+               ^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/normalization.py", line 325, in forward
+    return F.group_norm(input, self.num_groups, self.weight, self.bias, self.eps)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/functional.py", line 2956, in group_norm
+    return torch.group_norm(
+           ^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 457, in <module>
+[rank0]:     train(args)
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 401, in train
+[rank0]:     val_metrics = evaluate_epoch(
+[rank0]:                   ^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 213, in evaluate_epoch
+[rank0]:     if chosen is not None and batch_idx not in chosen:
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 75, in generate_ensemble
+[rank0]:     leave        = False,
+[rank0]:            ^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 479, in edm_sampler
+[rank0]:     denoised_next = denoiser_fn(x_next, t_next_batch)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 69, in denoiser_fn
+[rank0]:     all_steps = []
+[rank0]:
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 380, in forward
+[rank0]:     return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 347, in forward
+[rank0]:     raw = self.unet(net_input, c_noise, lead_time, ch_mask)
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 303, in forward
+[rank0]:     h = F.silu(self.out_norm(h))
+[rank0]:                ^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/modules/normalization.py", line 325, in forward
+[rank0]:     return F.group_norm(input, self.num_groups, self.weight, self.bias, self.eps)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/nn/functional.py", line 2956, in group_norm
+[rank0]:     return torch.group_norm(
+[rank0]:            ^^^^^^^^^^^^^^^^^
+[rank0]: KeyboardInterrupt

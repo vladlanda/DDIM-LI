@@ -1,0 +1,20 @@
+Epochs:   0%|                                                                                                                      | 0/200 [01:20<?, ?ep/s, loss=183504.8911, lr=1.00e-04]
+Traceback (most recent call last):                                                                                                                                                        
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 448, in <module>
+    train(args)
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 393, in train
+    val_metrics = evaluate_epoch(
+                  ^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 184, in evaluate_epoch
+    ens = generate_ensemble(
+          ^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 73, in generate_ensemble
+    pred = edm_sampler(
+           ^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 463, in edm_sampler
+    gamma = min(S_churn / num_steps, math.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0.0
+                                     ^^^^^^^^^^^^
+KeyboardInterrupt

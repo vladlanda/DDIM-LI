@@ -21,12 +21,17 @@ OMP_THREADS=$(( TOTAL_CORES / NUM_GPUS ))
 export OMP_NUM_THREADS=${OMP_THREADS}
 
 # Improves NCCL performance on PCIe (no NVLink)
-export NCCL_P2P_DISABLE=0          # keep P2P on — PCIe P2P is still faster than host
-export NCCL_IB_DISABLE=1           # no InfiniBand on a workstation
-export NCCL_SOCKET_IFNAME=lo       # use loopback for inter-process signalling
+export NCCL_P2P_DISABLE=0
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_IFNAME=lo
 
 # Reduces fragmentation in PyTorch's CUDA allocator (replaces deprecated PYTORCH_CUDA_ALLOC_CONF)
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+
+# Increase NCCL timeout from default 10min to 60min.
+# Needed when USB-attached data causes slow DataLoader startup or
+# when rank 0 runs a long validation (ensemble generation).
+export NCCL_TIMEOUT=3600
 
 echo "================================================"
 echo "  METSAT Lightning Nowcasting — DDP Training"

@@ -1,0 +1,27 @@
+Epochs:   0%|                                                                                                                                                     | 0/200 [00:24<?, ?ep/s]
+Traceback (most recent call last):                                                                                                                                                        
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 457, in <module>
+    train(args)
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 363, in train
+    scaler.scale(loss).backward()
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/_tensor.py", line 625, in backward
+    torch.autograd.backward(
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/autograd/__init__.py", line 354, in backward
+    _engine_run_backward(
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/autograd/graph.py", line 841, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 457, in <module>
+[rank0]:     train(args)
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 363, in train
+[rank0]:     scaler.scale(loss).backward()
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/_tensor.py", line 625, in backward
+[rank0]:     torch.autograd.backward(
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/autograd/__init__.py", line 354, in backward
+[rank0]:     _engine_run_backward(
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/autograd/graph.py", line 841, in _engine_run_backward
+[rank0]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: KeyboardInterrupt

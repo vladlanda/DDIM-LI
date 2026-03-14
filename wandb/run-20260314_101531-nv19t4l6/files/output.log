@@ -1,0 +1,40 @@
+  Validation:   0%|                                                                                                                                              | 0/2 [04:09<?, ?batch/s]
+Epochs:   0%|                                                                                                                      | 0/200 [04:13<?, ?ep/s, loss=182700.9004, lr=1.00e-04]
+Traceback (most recent call last):
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 457, in <module>
+    train(args)
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 401, in train
+    val_metrics = evaluate_epoch(
+                  ^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 213, in evaluate_epoch
+    ens = generate_ensemble(
+          ^^^^^^^^^^^^^^^^^^
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 75, in generate_ensemble
+    pred = edm_sampler(
+           ^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 463, in edm_sampler
+    gamma = min(S_churn / num_steps, math.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0.0
+                                     ^^^^^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 457, in <module>
+[rank0]:     train(args)
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 401, in train
+[rank0]:     val_metrics = evaluate_epoch(
+[rank0]:                   ^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 213, in evaluate_epoch
+[rank0]:     ens = generate_ensemble(
+[rank0]:           ^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/evaluate.py", line 75, in generate_ensemble
+[rank0]:     pred = edm_sampler(
+[rank0]:            ^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/model.py", line 463, in edm_sampler
+[rank0]:     gamma = min(S_churn / num_steps, math.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0.0
+[rank0]:                                      ^^^^^^^^^^^^
+[rank0]: KeyboardInterrupt

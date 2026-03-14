@@ -59,6 +59,29 @@ from model import (
 from evaluate import evaluate_epoch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+class _TqdmLoggingHandler(logging.StreamHandler):
+    """Routes all logging output through tqdm.write() so bars are not corrupted."""
+    def emit(self, record: logging.LogRecord):
+        try:
+            tqdm.write(self.format(record))
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
+def _setup_logging():
+    fmt     = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    handler = _TqdmLoggingHandler()
+    handler.setFormatter(fmt)
+    root = logging.getLogger()
+    root.handlers.clear()          # remove the basicConfig StreamHandler
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
+_setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -73,8 +96,11 @@ def setup_ddp():
 
     local_rank  = int(os.environ["LOCAL_RANK"])
     world_size  = int(os.environ["WORLD_SIZE"])
-    dist.init_process_group(backend="nccl")
     torch.cuda.set_device(local_rank)
+    dist.init_process_group(
+        backend   = "nccl",
+        device_id = torch.device(f"cuda:{local_rank}"),  # silences barrier() warning
+    )
     device = torch.device(f"cuda:{local_rank}")
     return local_rank, world_size, device
 
@@ -363,15 +389,22 @@ def train(args):
                 refresh = False,
             )
 
-        # ----- Validation (rank 0 only — avoid redundant ensemble generation) -----
+        # ----- Sync all ranks before potentially slow validation -----
+        # Without this, rank 1 would reach the end-of-epoch barrier while
+        # rank 0 is still inside evaluate_epoch(), causing NCCL timeout.
+        if ddp_active():
+            dist.barrier()
+
+        # ----- Validation (rank 0 only) -----
         val_metrics = {}
         if main and epoch % args.val_every == 0:
-            # Use unwrapped model for evaluation
             val_metrics = evaluate_epoch(
                 raw_model, val_loader, schedule, device,
                 stats       = stats,
                 channels    = channels,
+                n_members   = args.n_members,
                 num_samples = args.val_samples,
+                val_subset  = args.val_subset,
                 dt_min      = args.dt_min,
             )
             val_crps = val_metrics.get("crps_mean", float("inf"))
@@ -404,7 +437,7 @@ def train(args):
             if HAS_WANDB and args.wandb_project:
                 wandb.log(log_dict)
 
-        # Barrier: make sure rank 0 finishes saving before other ranks proceed
+        # ----- Sync before next epoch (rank 0 finishes checkpoint first) -----
         if ddp_active():
             dist.barrier()
 

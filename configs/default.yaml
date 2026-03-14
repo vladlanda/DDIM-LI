@@ -11,7 +11,7 @@
 # Regions used for training. Internally split into train/val
 # via train_val_split (temporal — no data leakage).
 train_roots:
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/Cloud2Lightning/datasets/africa_train/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
   # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
   # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
   # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
@@ -19,29 +19,29 @@ train_roots:
 # Held-out regions — NEVER used during training.
 # Only passed to evaluate.py after training is complete.
 test_roots:
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/Cloud2Lightning/datasets/africa_train/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
   # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
 
 # First 70% of each region's sequences → train, last 30% → val.
 # Split is temporal (chronological), not random.
 train_val_split: 0.7
-
+ 
 channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
   - ir
   - li
   - ch0
   - ch1
-
+ 
 T_in:    6          # context frames  (6 × 10 min = 1 hour)
 T_out:   36         # forecast steps  (36 × 10 min = 6 hours)
 dt_min:  10         # minutes between frames
 img_size: [256, 256]
-
+ 
 # Set to a small integer (e.g. 50) to load only a subset of sequences.
 # Useful for quickly verifying the pipeline works before a full training run.
 # null = load everything (production default)
 max_samples: 100
-
+ 
 # ----------------------------------------------------------
 # Model architecture
 # ----------------------------------------------------------
@@ -52,7 +52,7 @@ attn_resolutions:  [16, 8]        # apply self-attention at these spatial sizes
 dropout:           0.1
 emb_dim:           512            # conditioning embedding dimension
 sigma_data:        0.5            # EDM sigma_data (≈ std of normalised targets)
-
+ 
 # ----------------------------------------------------------
 # EDM noise schedule
 # ----------------------------------------------------------
@@ -60,7 +60,7 @@ P_mean:    -1.2    # lognormal mean for sigma sampling
 P_std:      1.2    # lognormal std  for sigma sampling
 sigma_min:  0.002
 sigma_max:  80.0
-
+ 
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
@@ -69,27 +69,29 @@ sigma_max:  80.0
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
 epochs:         200
-batch_size:     10
+batch_size:     8
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
 ema_decay:      0.9999
 amp:            true       # mixed precision (bf16 preferred on Ada/Blackwell GPUs)
 num_workers:    4          # per GPU; total CPU workers = num_workers × num_gpus
-
+ 
 # Loss weights
 cfg_drop_prob:    0.15     # probability of nulling context (for CFG training)
 spectral_weight:  0.1      # FFT magnitude loss weight
 li_weight:        3.0      # upweight lightning channel in MSE
-
+ 
 # ----------------------------------------------------------
 # Validation & logging
 # ----------------------------------------------------------
-val_every:    5            # run validation every N epochs
-val_samples:  5            # number of batches to evaluate on
-n_members:    10           # ensemble members during validation
+val_every:    20            # run validation every N epochs
+val_samples:  1            # number of batches to actually evaluate
+val_subset:   20           # randomly sample this many batches from the full val loader
+                           # (null = always take the first val_samples batches)
+n_members:    1            # ensemble members during validation (1 = fast, 10 = full probabilistic)
 cfg_scale:    1.5          # classifier-free guidance scale at inference
-
-output_dir:      outputs/run_test
+ 
+output_dir:      outputs/run1
 resume:          false
 wandb_project:   "DDIM-LI"        # set to your project name to enable WandB

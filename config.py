@@ -85,8 +85,11 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--cfg_scale",       type=float, default=1.5)
 
     # ---- Validation / logging ----
-    parser.add_argument("--val_every",    type=int, default=5)
-    parser.add_argument("--val_samples",  type=int, default=5)
+    parser.add_argument("--val_every",    type=int,  default=5)
+    parser.add_argument("--val_samples",  type=int,  default=5)
+    parser.add_argument("--val_subset",   type=int,  default=20,
+                        help="Randomly sample this many batches from the val loader. "
+                             "None = sequential first val_samples batches.")
     parser.add_argument("--output_dir",   type=str, default="outputs/run1")
     parser.add_argument("--resume",       type=_bool, default=False)
     parser.add_argument("--wandb_project", type=str, default="")

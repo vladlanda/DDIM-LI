@@ -1,0 +1,25 @@
+Epochs:   0%|                                                                                                                                                     | 0/200 [00:08<?, ?ep/s]
+Traceback (most recent call last):                                                                                                                                                        
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 458, in <module>
+    train(args)
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 374, in train
+    ema.update(model)
+  File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 163, in update
+    src[k].detach().float().cpu(), alpha=1 - self.decay
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 458, in <module>
+[rank0]:     train(args)
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 374, in train
+[rank0]:     ema.update(model)
+[rank0]:   File "/home/vladlanda/miniconda3/envs/py311pip/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DDIM-LI/train.py", line 163, in update
+[rank0]:     src[k].detach().float().cpu(), alpha=1 - self.decay
+[rank0]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: KeyboardInterrupt

@@ -14,12 +14,14 @@ skill vs. forecast horizon.
 """
 
 import logging
+import random
 from typing import Dict, List, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
+from tqdm import tqdm
 
 try:
     from skimage.metrics import structural_similarity as ssim_fn
@@ -43,9 +45,9 @@ def generate_ensemble(
     context:    torch.Tensor,      # (B, T_in, C, H, W)
     ch_mask:    torch.Tensor,      # (B, C)
     device:     torch.device,
-    n_members:  int  = 10,
-    num_steps:  int  = 20,
-    cfg_scale:  float = 1.5,       # > 1 → sharper via CFG
+    n_members:  int   = 10,
+    num_steps:  int   = 20,
+    cfg_scale:  float = 1.5,
 ) -> torch.Tensor:
     """
     Returns ensemble of shape (B, M, T_out, C, H, W).
@@ -56,18 +58,28 @@ def generate_ensemble(
     T_out = model.T_out
 
     members = []
-    for _ in range(n_members):
-        # Predict each step independently
+    member_bar = tqdm(
+        range(n_members),
+        desc         = "    Ensemble members",
+        unit         = "member",
+        dynamic_ncols = True,
+        leave        = False,
+    )
+    for _ in member_bar:
         all_steps = []
-        for step in range(T_out):
+        step_bar  = tqdm(
+            range(T_out),
+            desc         = "      Steps",
+            unit         = "step",
+            dynamic_ncols = True,
+            leave        = False,
+        )
+        for step in step_bar:
             lead_idx = torch.full((B,), step, device=device, dtype=torch.long)
 
             def denoiser_fn(x, sigma, _step=step, _lead_idx=lead_idx):
-                # Conditional denoised estimate
-                cond   = model(x, sigma, context,              ch_mask, _lead_idx)
-                # Unconditional (null context)
+                cond   = model(x, sigma, context,                 ch_mask, _lead_idx)
                 uncond = model(x, sigma, torch.zeros_like(context), ch_mask, _lead_idx)
-                # CFG blend
                 return uncond + cfg_scale * (cond - uncond)
 
             pred = edm_sampler(
@@ -148,38 +160,65 @@ def spread_skill(
 # ===================================================================
 
 def evaluate_epoch(
-    model:       MultiStepDenoiser,
-    val_loader:  DataLoader,
-    schedule:    EDMSchedule,
-    device:      torch.device,
-    stats:       Dict,
-    channels:    List[str],
-    n_members:   int   = 10,
-    num_samples: int   = 5,       # batches to evaluate on
-    cfg_scale:   float = 1.5,
-    li_threshold: float = 0.1,    # normalised units for lightning binary
-    dt_min:      int   = 10,
+    model:        MultiStepDenoiser,
+    val_loader:   DataLoader,
+    schedule:     EDMSchedule,
+    device:       torch.device,
+    stats:        Dict,
+    channels:     List[str],
+    n_members:    int   = 10,
+    num_samples:  int   = 5,       # number of BATCHES to evaluate on
+    cfg_scale:    float = 1.5,
+    li_threshold: float = 0.1,
+    dt_min:       int   = 10,
+    val_subset:   Optional[int] = None,  # randomly sample this many batches from
+                                         # the loader; None = use num_samples sequentially
 ) -> Dict[str, float]:
     """
-    Run probabilistic evaluation on val_loader.
-    Returns dict of aggregated metrics.
+    Run probabilistic evaluation on a random subset of val_loader.
+
+    val_subset: if set, randomly picks val_subset batch indices from the full
+                val_loader instead of always taking the first num_samples batches.
+                This avoids always evaluating on the same temporal window.
+    num_samples: how many batches to actually evaluate (the budget).
     """
     model.eval()
-    C = len(channels)
     li_idx = channels.index("li") if "li" in channels else None
+    T_out  = model.T_out
 
-    all_crps   = []
-    all_csi    = []
-    all_ss     = []
-    T_out      = model.T_out   # read from model — never depends on loop executing
+    # --- Build the list of batch indices to evaluate ---
+    total_batches = len(val_loader)
+    if val_subset is not None and val_subset < total_batches:
+        # Random sample without replacement across the full val set
+        chosen = sorted(random.sample(range(total_batches), val_subset))
+        budget = val_subset
+    else:
+        chosen = None          # sequential from start
+        budget = min(num_samples, total_batches)
 
-    for batch_idx, batch in enumerate(val_loader):
-        if batch_idx >= num_samples:
+    all_crps, all_csi, all_ss = [], [], []
+
+    pbar = tqdm(
+        enumerate(val_loader),
+        total        = budget,
+        desc         = "  Validation",
+        unit         = "batch",
+        dynamic_ncols = True,
+        leave        = True,
+    )
+
+    evaluated = 0
+    for batch_idx, batch in pbar:
+        # Skip batches not in our random sample
+        if chosen is not None and batch_idx not in chosen:
+            continue
+
+        if evaluated >= budget:
             break
 
-        context  = batch["context"].to(device)
-        target   = batch["target"].to(device)
-        ch_mask  = batch["tgt_mask"][:, 0].to(device)
+        context = batch["context"].to(device)
+        target  = batch["target"].to(device)
+        ch_mask = batch["tgt_mask"][:, 0].to(device)
 
         ens = generate_ensemble(
             model, context, ch_mask, device,
@@ -188,40 +227,45 @@ def evaluate_epoch(
 
         ens_np = ens.cpu().numpy()
         tgt_np = target.cpu().numpy()
-
-        B = ens_np.shape[0]
+        B      = ens_np.shape[0]
 
         for b in range(B):
-            crps_per_step = []
-            csi_per_step  = []
-            ss_per_step   = []
+            crps_per_step, csi_per_step, ss_per_step = [], [], []
 
             for t in range(T_out):
-                ens_t = ens_np[b, :, t]   # (M, C, H, W)
-                tgt_t = tgt_np[b, t]      # (C, H, W)
+                ens_t = ens_np[b, :, t]
+                tgt_t = tgt_np[b, t]
 
                 crps_per_step.append(crps_energy(ens_t, tgt_t))
                 ss_per_step.append(spread_skill(ens_t, tgt_t))
 
                 if li_idx is not None:
-                    ens_li    = ens_t[:, li_idx]
-                    tgt_li    = tgt_t[li_idx]
-                    pred_prob = (ens_li > li_threshold).mean(axis=0)
-                    obs_bin   = (tgt_li > li_threshold).astype(float)
-                    ct        = lightning_contingency(pred_prob, obs_bin)
-                    csi_per_step.append(ct["csi"])
+                    pred_prob = (ens_t[:, li_idx] > li_threshold).mean(axis=0)
+                    obs_bin   = (tgt_t[li_idx] > li_threshold).astype(float)
+                    csi_per_step.append(
+                        lightning_contingency(pred_prob, obs_bin)["csi"]
+                    )
 
             all_crps.append(crps_per_step)
             all_ss.append(ss_per_step)
             if csi_per_step:
                 all_csi.append(csi_per_step)
 
-    # Guard: return empty metrics if val_loader had no batches
+        evaluated += 1
+
+        # Live metrics in the tqdm postfix
+        if all_crps:
+            pbar.set_postfix(
+                crps = f"{np.mean(all_crps):.4f}",
+                csi  = f"{np.mean(all_csi):.3f}" if all_csi else "n/a",
+                refresh = False,
+            )
+
     if not all_crps:
         logger.warning("evaluate_epoch: no batches evaluated — val loader may be empty.")
         return {}
 
-    all_crps = np.array(all_crps)   # (N, T_out)
+    all_crps = np.array(all_crps)
     all_ss   = np.array(all_ss)
 
     metrics = {

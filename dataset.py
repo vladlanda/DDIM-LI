@@ -30,6 +30,29 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+# Ensure dataset log output goes through tqdm.write() so progress bars are
+# not corrupted. train.py installs the handler on the root logger; this call
+# is a no-op if that handler is already present (i.e. when called from train).
+def _ensure_tqdm_logging():
+    from tqdm import tqdm as _tqdm
+    root = logging.getLogger()
+    if any(isinstance(h, logging.StreamHandler) and
+           type(h).__name__ == "_TqdmLoggingHandler" for h in root.handlers):
+        return  # already set up by train.py
+    class _H(logging.StreamHandler):
+        def emit(self, record):
+            try:
+                _tqdm.write(self.format(record))
+            except Exception:
+                self.handleError(record)
+    handler = _H()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+_ensure_tqdm_logging()
+
 # -------------------------------------------------------------------
 # Constants
 # -------------------------------------------------------------------
@@ -69,7 +92,7 @@ def compute_or_load_stats(
     sample    = all_files[:n_samples]
 
     for fp in tqdm(sample, desc="  Computing stats", unit="img",
-                   dynamic_ncols=True, leave=False):
+                   dynamic_ncols=True, leave=True):
         ch = fp.stem.split("_")[-1]
         if ch not in channel_list:
             continue
@@ -176,7 +199,7 @@ def build_index(root: str,
     index: Dict[datetime, Dict[str, Path]] = {}
 
     for ir_fp in tqdm(ir_files, desc=f"  Scanning {Path(root).name}",
-                      unit="file", dynamic_ncols=True, leave=False):
+                      unit="file", dynamic_ncols=True, leave=True):
 
         start_dt = parse_ir_filename(ir_fp)
         if start_dt is None:
@@ -239,7 +262,7 @@ def build_valid_starts(
     i = 0
     for i in tqdm(range(N - seq_len + 1),
                   desc=f"  Validating {root_name}",
-                  unit="ts", dynamic_ncols=True, leave=False):
+                  unit="ts", dynamic_ncols=True, leave=True):
 
         # Check all consecutive gaps in window [i .. i+seq_len-1]
         ok = True
