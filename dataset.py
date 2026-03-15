@@ -238,33 +238,32 @@ def build_valid_starts(
     dt:           timedelta,
     seq_len:      int,
     root_name:    str = "",
-) -> List[datetime]:
+) -> List[List[datetime]]:
     """
-    Finds all start timestamps t where t, t+dt, t+2dt, … t+(seq_len-1)*dt
-    all exist, using a single O(N) sorted pass with inline gap checking.
+    Returns a list of valid sequences, where each sequence is a list of
+    seq_len actual datetime objects taken directly from sorted_times.
 
-    This is ~10× faster than the set-membership approach for large datasets
-    because it avoids constructing seq_len timedelta objects per timestamp.
+    Storing the full sequence (not just t0) is critical because file
+    timestamps have per-file jitter (e.g. 10:20:03 instead of 10:20:00).
+    Recomputing times as t0 + i*dt would generate datetimes that don't
+    exist in the index → KeyError in __getitem__.
     """
     if len(sorted_times) < seq_len:
         return []
 
-    dt_seconds  = int(dt.total_seconds())
-    gap_min     = dt_seconds - 60    # allow ±1 min slack
-    gap_max     = dt_seconds + 60
+    dt_seconds = int(dt.total_seconds())
+    gap_min    = dt_seconds - 60    # allow ±1 min slack
+    gap_max    = dt_seconds + 60
 
-    # Convert to integer seconds-since-epoch for fast arithmetic
+    # Convert to integer seconds-since-epoch for fast gap arithmetic
     epochs = [int(t.timestamp()) for t in sorted_times]
     N      = len(epochs)
     valid  = []
 
-    # Sliding window: maintain a pointer to the end of the current window
-    i = 0
     for i in tqdm(range(N - seq_len + 1),
                   desc=f"  Validating {root_name}",
                   unit="ts", dynamic_ncols=True, leave=True):
 
-        # Check all consecutive gaps in window [i .. i+seq_len-1]
         ok = True
         for j in range(i, i + seq_len - 1):
             gap = epochs[j + 1] - epochs[j]
@@ -272,7 +271,8 @@ def build_valid_starts(
                 ok = False
                 break
         if ok:
-            valid.append(sorted_times[i])
+            # Store the actual datetime objects — never recompute from t0
+            valid.append(sorted_times[i : i + seq_len])
 
     return valid
 
@@ -324,24 +324,20 @@ class METSATDataset(Dataset):
             root, channel_list, stat_path=stat_path
         )
 
-        # Pre-compute time offsets as integers (seconds) for fast __getitem__
-        seq_len         = T_in + T_out
-        self._dt_secs   = int(self.dt.total_seconds())
-        self._offsets   = [i * self._dt_secs for i in range(seq_len)]
-
-        # Build valid sequence start indices (single O(N) sorted pass)
-        self.valid_starts = build_valid_starts(
+        # Build valid sequences (each is a list of seq_len actual datetimes)
+        seq_len = T_in + T_out
+        self.valid_sequences = build_valid_starts(
             self.sorted_times, self.dt, seq_len,
             root_name=Path(root).name,
         )
 
-        if max_samples is not None and max_samples < len(self.valid_starts):
-            step = len(self.valid_starts) // max_samples
-            self.valid_starts = self.valid_starts[::step][:max_samples]
-            logger.info(f"Dataset '{root}': {len(self.valid_starts)} sequences "
+        if max_samples is not None and max_samples < len(self.valid_sequences):
+            step = len(self.valid_sequences) // max_samples
+            self.valid_sequences = self.valid_sequences[::step][:max_samples]
+            logger.info(f"Dataset '{root}': {len(self.valid_sequences)} sequences "
                         f"(capped at max_samples={max_samples})")
         else:
-            logger.info(f"Dataset '{root}': {len(self.valid_starts)} valid sequences")
+            logger.info(f"Dataset '{root}': {len(self.valid_sequences)} valid sequences")
 
         # Pre-compute normalisation arrays for vectorised apply in _load_frame
         self._norm_mean = np.array([
@@ -355,16 +351,11 @@ class METSATDataset(Dataset):
             for ch in channel_list])
 
     def __len__(self):
-        return len(self.valid_starts)
+        return len(self.valid_sequences)
 
     def _load_frame(self, dt: datetime) -> Tuple[np.ndarray, np.ndarray]:
         """
         Returns (C, H, W) normalised frame and (C,) mask.
-
-        Speed improvements:
-          - np.frombuffer instead of np.array(Image.open(...)) — skips a copy
-          - Single vectorised (mean/std) normalisation across all channels at once
-          - cbrt applied only to channels that need it via boolean mask
         """
         chs  = self.index[dt]
         h, w = self.img_size
@@ -378,13 +369,10 @@ class METSATDataset(Dataset):
             img = Image.open(chs[ch]).convert("L")
             if img.size != (w, h):
                 img = img.resize((w, h), Image.BILINEAR)
-            # np.frombuffer avoids an extra array copy vs np.array(img)
             arr = np.frombuffer(img.tobytes(), dtype=np.uint8).reshape(h, w)
             frame[i] = arr.astype(np.float32) * (1.0 / 255.0)
             mask[i]  = 1.0
 
-        # Vectorised normalisation across all C channels at once
-        # cbrt channels first, then (x - mean) / std
         for i in range(self.C):
             if mask[i] == 0.0:
                 continue
@@ -395,14 +383,8 @@ class METSATDataset(Dataset):
         return frame, mask
 
     def __getitem__(self, idx):
-        t0     = self.valid_starts[idx]
-        t0_sec = int(t0.timestamp())
-
-        # Reconstruct times from integer offsets — avoids T_in+T_out timedelta additions
-        times = [
-            datetime.fromtimestamp(t0_sec + off)
-            for off in self._offsets
-        ]
+        # Use the pre-validated actual datetimes — no arithmetic, no jitter
+        times = self.valid_sequences[idx]   # List[datetime], length T_in + T_out
 
         frames, masks = zip(*[self._load_frame(t) for t in times])
         frames = np.stack(frames)   # (T_in+T_out, C, H, W)
@@ -476,7 +458,7 @@ def make_dataloaders(
     """
     assert 0.0 < train_val_split < 1.0, "train_val_split must be in (0, 1)"
 
-    # Build each region dataset once, then slice valid_starts in-place.
+    # Build each region dataset once, then slice valid_sequences in-place.
     # No second construction pass — avoids duplicate index scanning and logs.
     full_ds = MultiRegionDataset(
         train_roots, channel_list=channel_list,
@@ -491,29 +473,28 @@ def make_dataloaders(
     train_parts, val_parts = [], []
 
     for ds in full_ds.datasets:
-        all_starts = ds.valid_starts          # full list, not yet mutated
-        n          = len(all_starts)
-        n_train    = max(1, int(n * train_val_split))
+        all_seqs = ds.valid_sequences          # full list, not yet mutated
+        n        = len(all_seqs)
+        n_train  = max(1, int(n * train_val_split))
 
-        train_starts = all_starts[:n_train]   # slice BEFORE any mutation
-        val_starts   = all_starts[n_train:]
+        train_seqs = all_seqs[:n_train]        # slice BEFORE any mutation
+        val_seqs   = all_seqs[n_train:]
 
         # Train part: reuse the existing dataset object
         train_ds = ds
-        train_ds.valid_starts = train_starts
-        train_ds.augment      = True
+        train_ds.valid_sequences = train_seqs
+        train_ds.augment         = True
         train_parts.append(train_ds)
 
         # Val part: shallow-copy (shares index/stats, no re-scan)
-        # Done AFTER we've saved val_starts so mutation of ds doesn't affect it
         val_ds = copy.copy(ds)
-        val_ds.valid_starts = val_starts
-        val_ds.augment      = False
+        val_ds.valid_sequences = val_seqs
+        val_ds.augment         = False
         val_parts.append(val_ds)
 
         logger.info(
             f"  {ds.root}: {n} sequences → "
-            f"{len(train_starts)} train / {len(val_starts)} val  "
+            f"{len(train_seqs)} train / {len(val_seqs)} val  "
             f"(split={train_val_split:.0%})"
         )
 

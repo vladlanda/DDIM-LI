@@ -11,16 +11,16 @@
 # Regions used for training. Internally split into train/val
 # via train_val_split (temporal — no data leakage).
 train_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
-  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
-  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
-  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
+  # - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
 
 # Held-out regions — NEVER used during training.
 # Only passed to evaluate.py after training is complete.
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
-  # - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
+  # - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
 
 # First 70% of each region's sequences → train, last 30% → val.
 # Split is temporal (chronological), not random.
@@ -33,14 +33,14 @@ channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
   - ch1
  
 T_in:    6          # context frames  (6 × 10 min = 1 hour)
-T_out:   36         # forecast steps  (36 × 10 min = 6 hours)
+T_out:   6         # forecast steps  (36 × 10 min = 6 hours)
 dt_min:  10         # minutes between frames
-img_size: [256, 256]
+img_size: [128, 128]
  
 # Set to a small integer (e.g. 50) to load only a subset of sequences.
 # Useful for quickly verifying the pipeline works before a full training run.
 # null = load everything (production default)
-max_samples: 100
+max_samples: null
  
 # ----------------------------------------------------------
 # Model architecture
@@ -69,7 +69,7 @@ sigma_max:  80.0
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
 epochs:         200
-batch_size:     8
+batch_size:     42
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
@@ -87,11 +87,11 @@ li_weight:        3.0      # upweight lightning channel in MSE
 # ----------------------------------------------------------
 val_every:    20            # run validation every N epochs
 val_samples:  1            # number of batches to actually evaluate
-val_subset:   20           # randomly sample this many batches from the full val loader
+val_subset:   1            # randomly sample this many batches from the full val loader
                            # (null = always take the first val_samples batches)
 n_members:    1            # ensemble members during validation (1 = fast, 10 = full probabilistic)
 cfg_scale:    1.5          # classifier-free guidance scale at inference
  
-output_dir:      outputs/run1
+output_dir:      outputs/run_1h_dim128
 resume:          false
 wandb_project:   "DDIM-LI"        # set to your project name to enable WandB

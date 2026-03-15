@@ -3,3 +3,4 @@ datasets
 .env
 .venv
 wandb
+outputs

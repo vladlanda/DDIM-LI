@@ -84,6 +84,7 @@ def run_inference(args):
         mask_np    = item["ctx_mask"][0].numpy() # (C,)  use first step mask
 
         logger.info(f"Running forecast {sample_idx+1}/{args.n_forecasts}")
+        print(item.keys())
 
         # (M, T_out, C, H, W)
         ens_norm = forecast(
@@ -129,7 +130,7 @@ def parse_args():
     p.add_argument("--output_dir",   default="outputs/inference")
     p.add_argument("--n_members",    type=int,   default=20)
     p.add_argument("--cfg_scale",    type=float, default=1.5)
-    p.add_argument("--n_forecasts",  type=int,   default=10)
+    p.add_argument("--n_forecasts",  type=int,   default=6)
     p.add_argument("--img_size",     nargs=2, type=int, default=[256, 256])
     p.add_argument("--plot",         action="store_true")
     return p.parse_args()
