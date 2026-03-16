@@ -68,7 +68,7 @@ sigma_max:  80.0
 # With 2 × RTX 5090 and batch_size=4 → effective batch = 8.
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
-epochs:         200
+epochs:         61
 batch_size:     42
 lr:             1.0e-4
 weight_decay:   1.0e-4
@@ -93,5 +93,5 @@ n_members:    1            # ensemble members during validation (1 = fast, 10 = 
 cfg_scale:    1.5          # classifier-free guidance scale at inference
  
 output_dir:      outputs/run_1h_dim128
-resume:          false
+resume:          true
 wandb_project:   "DDIM-LI"        # set to your project name to enable WandB

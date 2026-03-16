@@ -92,6 +92,12 @@ def add_arguments(parser: argparse.ArgumentParser):
                              "None = sequential first val_samples batches.")
     parser.add_argument("--output_dir",   type=str, default="outputs/run1")
     parser.add_argument("--resume",       type=_bool, default=False)
+    parser.add_argument("--extend",       type=_bool, default=False,
+                        help="Load weights from latest.pt but reset the epoch counter "
+                             "and LR scheduler for a fresh training phase. "
+                             "Use together with --resume. Output is written to "
+                             "<output_dir>_ext1 (then _ext2, etc.). "
+                             "--epochs sets the length of this new phase.")
     parser.add_argument("--wandb_project", type=str, default="")
 
     return parser

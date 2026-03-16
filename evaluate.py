@@ -109,13 +109,60 @@ def crps_energy(
     Computed pixelwise, returned as scalar mean.
     """
     M = ensemble.shape[0]
-    term1 = np.abs(ensemble - obs[None]).mean(axis=0)                      # (...)
+    term1 = np.abs(ensemble - obs[None]).mean(axis=0)
     diffs = 0.0
     for i in range(M):
         for j in range(i + 1, M):
             diffs += np.abs(ensemble[i] - ensemble[j])
     term2 = diffs / (M * (M - 1) / 2 + 1e-8)
     return float((term1 - 0.5 * term2).mean())
+
+
+# ===================================================================
+# Cloud metrics  (continuous spatial fields: IR / CH0 / CH1)
+# ===================================================================
+
+def cloud_metrics(
+    ens_mean:   np.ndarray,
+    obs:        np.ndarray,
+    ch_indices: List[int],
+    ch_names:   List[str],
+    stats:      Dict,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Per-channel RMSE and MAE in physical units + SSIM.
+
+    Linear channels (ir, ch0-ch9): error_K = error_norm * stats[ch]["std"]
+    cbrt channels (li): kept in normalised units, unit="norm"
+
+    Returns dict keyed by channel name:
+        {"ir": {"rmse": K, "mae": K, "ssim": float, "unit": "K"}, ...}
+    """
+    out = {}
+    for ci, ch in zip(ch_indices, ch_names):
+        pred = ens_mean[ci].astype(np.float32)
+        gt   = obs[ci].astype(np.float32)
+
+        rmse_norm = float(np.sqrt(np.mean((pred - gt) ** 2)))
+        mae_norm  = float(np.mean(np.abs(pred - gt)))
+
+        is_cbrt = ch in stats and stats[ch].get("transform") == "cbrt"
+        if not is_cbrt and ch in stats:
+            scale     = stats[ch]["std"]
+            rmse_phys = rmse_norm * scale
+            mae_phys  = mae_norm  * scale
+            unit = "K"
+        else:
+            rmse_phys = rmse_norm
+            mae_phys  = mae_norm
+            unit = "norm"
+
+        entry = {"rmse": rmse_phys, "mae": mae_phys, "unit": unit}
+        if HAS_SKIMAGE:
+            data_range = float(gt.max() - gt.min()) + 1e-8
+            entry["ssim"] = float(ssim_fn(gt, pred, data_range=data_range))
+        out[ch] = entry
+    return out
 
 
 # ===================================================================
@@ -135,11 +182,41 @@ def lightning_contingency(
     FN = ((1 - pred_bin) * obs_bin).sum()
     TN = ((1 - pred_bin) * (1 - obs_bin)).sum()
 
-    csi = TP / (TP + FP + FN + 1e-8)
-    pod = TP / (TP + FN + 1e-8)
-    far = FP / (TP + FP + 1e-8)
+    csi  = TP / (TP + FP + FN + 1e-8)
+    pod  = TP / (TP + FN + 1e-8)
+    far  = FP / (TP + FP + 1e-8)
     bias = (TP + FP) / (TP + FN + 1e-8)
-    return {"csi": float(csi), "pod": float(pod), "far": float(far), "bias": float(bias)}
+    return {"csi": float(csi), "pod": float(pod),
+            "far": float(far), "bias": float(bias)}
+
+
+def fss(
+    pred_prob: np.ndarray,   # (H, W) ensemble probability [0,1]
+    obs_bin:   np.ndarray,   # (H, W) binary observation
+    scale:     int = 8,      # neighbourhood half-width in pixels
+) -> float:
+    """
+    Fractions Skill Score at a given spatial scale.
+    FSS=1 → perfect, FSS=0 → no skill, FSS<0 → worse than climatology.
+
+    Uses uniform box filtering to compute neighbourhood fractions.
+    """
+    from scipy.ndimage import uniform_filter
+    size = 2 * scale + 1
+    pred_frac = uniform_filter(pred_prob.astype(np.float32), size=size)
+    obs_frac  = uniform_filter(obs_bin.astype(np.float32),   size=size)
+
+    fss_num   = np.mean((pred_frac - obs_frac) ** 2)
+    fss_ref   = np.mean(pred_frac ** 2) + np.mean(obs_frac ** 2)
+    return float(1.0 - fss_num / (fss_ref + 1e-8))
+
+
+def brier_score(
+    pred_prob: np.ndarray,   # (H, W) ensemble probability
+    obs_bin:   np.ndarray,   # (H, W) binary
+) -> float:
+    """Mean squared error between predicted probability and binary observation."""
+    return float(np.mean((pred_prob - obs_bin.astype(np.float32)) ** 2))
 
 
 # ===================================================================
@@ -316,60 +393,773 @@ def forecast(
 # Quick visualisation (matplotlib)
 # ===================================================================
 
+def _make_rgb(frames: np.ndarray, channels: List[str]) -> np.ndarray:
+    """
+    Compose a false-colour RGB image from ir/ch0/ch1 channels.
+    frames: (C, H, W)  denormalised
+    Returns (H, W, 3) uint8.
+    """
+    def _pull(ch):
+        if ch in channels:
+            arr = frames[channels.index(ch)]
+        else:
+            arr = np.zeros(frames.shape[-2:], dtype=np.float32)
+        lo, hi = arr.min(), arr.max()
+        return ((arr - lo) / (hi - lo + 1e-8) * 255).astype(np.uint8)
+
+    r = _pull("ir")
+    g = _pull("ch0")
+    b = _pull("ch1")
+    return np.stack([r, g, b], axis=-1)   # (H, W, 3)
+
+
+def _make_li(frames: np.ndarray, channels: List[str]) -> np.ndarray:
+    """
+    Return the LI channel as a (H, W) float array, normalised 0-1.
+    """
+    if "li" in channels:
+        arr = frames[channels.index("li")]
+    else:
+        arr = np.zeros(frames.shape[-2:], dtype=np.float32)
+    lo, hi = arr.min(), arr.max()
+    return (arr - lo) / (hi - lo + 1e-8)
+
+
 def plot_forecast(
-    ens_np:   np.ndarray,      # (M, T_out, C, H, W)
-    tgt_np:   np.ndarray,      # (T_out, C, H, W)
-    channels: List[str],
-    steps_to_plot: List[int] = [0, 5, 11, 17, 23, 35],
-    save_path: Optional[str] = None,
+    context_np:    np.ndarray,                  # (T_in,  C, H, W) denormalised
+    ens_np:        np.ndarray,                  # (M, T_out, C, H, W) denormalised
+    channels:      List[str],
+    gt_np:         Optional[np.ndarray] = None, # (T_out, C, H, W) or None
+    steps_to_plot: Optional[List[int]]  = None, # None = all steps
+    save_path:     Optional[str]        = None,
 ):
     """
-    Plot ensemble mean, spread (std), and ground truth for selected steps.
-    One row per step, columns: [GT, Ens Mean, Spread] per channel.
+    Layout: rows × columns grid.
+
+      Rows (2 or 3):
+        Row 0 — Context    : last context frame  [IR+CH0+CH1 | LI]
+        Row 1 — Prediction : ens-mean            [IR+CH0+CH1 | LI | LI-spread]
+        Row 2 — Ground Truth (only if gt_np):    [IR+CH0+CH1 | LI]
+
+      Columns: one group of 3 sub-columns per forecast step
+               (+10min, +20min, … up to T_out×dt_min)
+
+    With T_out=36 this produces a 36-column × 2-3 row image.
+    Each cell is kept small (cell_w=1.6in) so the full figure is ~58in wide
+    at 120 dpi → a wide but readable PNG.
     """
     try:
+        import matplotlib
+        matplotlib.use("Agg")          # headless — no display needed
         import matplotlib.pyplot as plt
-        import matplotlib.gridspec as gridspec
     except ImportError:
         logger.warning("matplotlib not available, skipping plot")
         return
 
     M, T_out, C, H, W = ens_np.shape
-    n_steps = len(steps_to_plot)
-    n_ch    = min(C, 4)  # plot at most 4 channels
+    steps   = list(range(T_out)) if steps_to_plot is None else \
+              [s for s in steps_to_plot if s < T_out]
+    n_steps = len(steps)
+    has_gt  = gt_np is not None
+    n_rows  = 3 if has_gt else 2
 
-    fig = plt.figure(figsize=(n_ch * 9, n_steps * 3))
-    gs  = gridspec.GridSpec(n_steps, n_ch * 3, figure=fig, hspace=0.05, wspace=0.05)
+    # 3 sub-columns per step: [rgb | li | spread(pred only)]
+    n_subcols  = n_steps * 3
+    cell_w     = 1.6     # inches per sub-column
+    cell_h     = 2.2     # inches per row
+    label_w    = 1.0     # extra left margin for row labels
 
-    for row, step in enumerate(steps_to_plot):
-        if step >= T_out:
-            continue
-        ens_mean = ens_np[:, step].mean(axis=0)  # (C, H, W)
+    fig_w = label_w + n_subcols * cell_w
+    fig_h = n_rows  * cell_h
+
+    fig, axes = plt.subplots(
+        n_rows, n_subcols,
+        figsize     = (fig_w, fig_h),
+        squeeze     = False,
+        gridspec_kw = {"wspace": 0.02, "hspace": 0.12},
+    )
+    fig.patch.set_facecolor("#1a1a2e")
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.axis("off")
+            ax.set_facecolor("#1a1a2e")
+
+    # Pre-compute last context frame composites (shared across all columns)
+    ctx_last = context_np[-1]              # (C, H, W)
+    ctx_rgb  = _make_rgb(ctx_last, channels)
+    ctx_li   = _make_li(ctx_last,  channels)
+
+    font_title = max(4, min(7, int(120 / n_steps)))   # shrinks gracefully
+
+    for col_idx, step in enumerate(steps):
+        base     = col_idx * 3
+        lead_min = (step + 1) * 10
+
+        ens_mean = ens_np[:, step].mean(axis=0)   # (C, H, W)
         ens_std  = ens_np[:, step].std(axis=0)
-        gt       = tgt_np[step]
 
-        for col, ch in enumerate(channels[:n_ch]):
-            lead_min = (step + 1) * 10
+        # ── Row 0: Context (repeated for every column so time labels align) ──
+        axes[0, base    ].imshow(ctx_rgb)
+        axes[0, base + 1].imshow(ctx_li, cmap="hot", vmin=0, vmax=1)
+        axes[0, base + 2].set_visible(False)
+        if col_idx == 0:
+            axes[0, base    ].set_title("IR/CH0/CH1", fontsize=font_title, color="white", pad=2)
+            axes[0, base + 1].set_title("LI",         fontsize=font_title, color="white", pad=2)
 
-            ax_gt   = fig.add_subplot(gs[row, col * 3])
-            ax_mean = fig.add_subplot(gs[row, col * 3 + 1])
-            ax_std  = fig.add_subplot(gs[row, col * 3 + 2])
+        # ── Row 1: Prediction ──
+        pred_rgb = _make_rgb(ens_mean, channels)
+        pred_li  = _make_li(ens_mean,  channels)
+        if "li" in channels:
+            s = ens_std[channels.index("li")]
+            spread_li = (s - s.min()) / (s.max() - s.min() + 1e-8)
+        else:
+            spread_li = np.zeros((H, W), dtype=np.float32)
 
-            vmin, vmax = gt[col].min(), gt[col].max()
-            ax_gt.imshow(gt[col],       cmap="viridis", vmin=vmin, vmax=vmax)
-            ax_mean.imshow(ens_mean[col], cmap="viridis", vmin=vmin, vmax=vmax)
-            ax_std.imshow(ens_std[col],  cmap="plasma")
+        axes[1, base    ].imshow(pred_rgb)
+        axes[1, base + 1].imshow(pred_li,  cmap="hot",    vmin=0, vmax=1)
+        axes[1, base + 2].imshow(spread_li, cmap="plasma", vmin=0, vmax=1)
+        axes[1, base    ].set_title(f"+{lead_min}m", fontsize=font_title, color="white", pad=2)
 
-            for ax, title in zip(
-                [ax_gt, ax_mean, ax_std],
-                [f"{ch} GT +{lead_min}m", "Ens Mean", "Spread"],
-            ):
-                ax.set_title(title, fontsize=7)
-                ax.axis("off")
+        # ── Row 2: Ground truth ──
+        if has_gt:
+            gt_frame = gt_np[step]
+            axes[2, base    ].imshow(_make_rgb(gt_frame, channels))
+            axes[2, base + 1].imshow(_make_li(gt_frame,  channels), cmap="hot", vmin=0, vmax=1)
+            axes[2, base + 2].set_visible(False)
+
+    # Row labels on the far left of each row
+    row_labels = ["Context", "Prediction", "Ground Truth"] if has_gt \
+                 else ["Context", "Prediction"]
+    for r, label in enumerate(row_labels):
+        axes[r, 0].set_ylabel(label, fontsize=8, color="white",
+                              rotation=90, labelpad=4, va="center")
+        axes[r, 0].yaxis.set_label_position("left")
+        axes[r, 0].axis("on")
+        axes[r, 0].tick_params(left=False, bottom=False,
+                               labelleft=False, labelbottom=False)
+        for spine in axes[r, 0].spines.values():
+            spine.set_visible(False)
+
+    # Sub-column header legend (once, top-right)
+    fig.text(0.99, 0.99,
+             "Pred cols: [IR+CH0+CH1 | LI | LI-spread]",
+             ha="right", va="top", fontsize=7, color="#aaaaaa",
+             transform=fig.transFigure)
+
+    plt.suptitle(
+        f"METSAT Lightning Nowcast — {n_steps} steps × 10min  "
+        f"({'with GT' if has_gt else 'no GT'})",
+        fontsize=10, color="white", y=1.005,
+    )
 
     if save_path:
-        plt.savefig(save_path, dpi=120, bbox_inches="tight")
-        logger.info(f"Saved forecast plot: {save_path}")
+        plt.savefig(save_path, dpi=100, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        logger.info(f"  Saved plot: {save_path}  ({n_steps} steps, {n_rows} rows)")
     else:
         plt.show()
-    plt.close()
+    plt.close(fig)
+
+
+# ===================================================================
+# Full test-set evaluation  (called from __main__)
+# ===================================================================
+
+def run_test_evaluation(args):
+    """
+    Load a checkpoint, run ensemble inference on a held-out test folder,
+    compute per-lead-time metrics, and save results.
+
+    Outputs written to args.output_dir:
+        metrics_summary.json   — scalar summary (crps_mean, csi_mean, ...)
+        metrics_per_step.csv   — one row per lead-time step
+        skill_curves.png       — CRPS / spread-skill / CSI vs lead time
+        plots/                 — one PNG per evaluated sequence (if --plot)
+    """
+    import os, json, csv
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
+
+    # ---- tqdm-safe logging ----
+    from tqdm import tqdm as _tqdm
+
+    class _TqdmHandler(logging.StreamHandler):
+        def emit(self, record):
+            try:
+                _tqdm.write(self.format(record))
+            except Exception:
+                self.handleError(record)
+
+    root_log = logging.getLogger()
+    root_log.handlers.clear()
+    h = _TqdmHandler()
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    root_log.addHandler(h)
+    root_log.setLevel(logging.INFO)
+
+    # ---- Device ----
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Device: {device}")
+
+    # ---- Load checkpoint ----
+    from model import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule
+
+    ckpt      = torch.load(args.checkpoint, map_location=device)
+    ckpt_args = ckpt["args"]
+    channels  = ckpt["channels"]
+    stats     = ckpt["stats"]
+    T_in      = ckpt_args["T_in"]
+    T_out     = ckpt_args["T_out"]
+    dt_min    = ckpt_args["dt_min"]
+    C         = len(channels)
+
+    unet = UNet(
+        in_channels      = C * (T_in + 2),
+        out_channels     = C,
+        base_channels    = ckpt_args["base_channels"],
+        channel_mults    = tuple(ckpt_args["channel_mults"]),
+        num_res_blocks   = ckpt_args["num_res_blocks"],
+        attn_resolutions = tuple(ckpt_args["attn_resolutions"]),
+        dropout          = 0.0,
+        emb_dim          = ckpt_args["emb_dim"],
+    )
+    precond  = EDMPrecond(unet, sigma_data=ckpt_args.get("sigma_data", 0.5))
+    model    = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)
+    # Prefer EMA weights for evaluation
+    state    = ckpt.get("ema") or ckpt["model"]
+    model.load_state_dict(state)
+    model.to(device).eval()
+    logger.info(f"Checkpoint loaded: {args.checkpoint}")
+    logger.info(f"  channels={channels}  T_in={T_in}  T_out={T_out}  dt={dt_min}min")
+
+    # ---- Test loader (non-overlapping) ----
+    from dataset import make_test_loader
+
+    test_loader = make_test_loader(
+        test_roots   = args.test_roots,
+        channel_list = channels,
+        stats        = stats,
+        T_in         = T_in,
+        T_out        = T_out,
+        img_size     = tuple(args.img_size),
+        batch_size   = args.batch_size,
+        num_workers  = args.num_workers,
+    )
+    logger.info(f"Test sequences (non-overlapping): {len(test_loader.dataset)}")
+
+    # ---- Channel index helpers ----
+    li_idx      = channels.index("li") if "li" in channels else None
+    cloud_chs   = [ch for ch in channels if ch != "li"]   # names
+    cloud_idxs  = [channels.index(ch) for ch in cloud_chs]
+
+    fss_scales = args.fss_scales
+
+    # ---- Accumulators ----
+    # CRPS / spread-skill: single scalar per (sample, step)
+    crps_by_step = [[] for _ in range(T_out)]
+    ss_by_step   = [[] for _ in range(T_out)]
+
+    # Per-channel cloud metrics: dict[ch] -> list-per-step -> list of scalars
+    # keys: "rmse", "mae", "ssim"  (ssim only if HAS_SKIMAGE)
+    rmse_by_ch_step = {ch: [[] for _ in range(T_out)] for ch in cloud_chs}
+    mae_by_ch_step  = {ch: [[] for _ in range(T_out)] for ch in cloud_chs}
+    ssim_by_ch_step = {ch: [[] for _ in range(T_out)] for ch in cloud_chs}
+
+    # Lightning
+    csi_by_step   = [[] for _ in range(T_out)]
+    pod_by_step   = [[] for _ in range(T_out)]
+    far_by_step   = [[] for _ in range(T_out)]
+    brier_by_step = [[] for _ in range(T_out)]
+    fss_by_scale_step = {s: [[] for _ in range(T_out)] for s in fss_scales}
+
+    # All lead-time steps — pixel subsampling keeps memory bounded
+    pr_steps  = list(range(T_out))
+    pr_probs  = {t: [] for t in pr_steps}
+    pr_labels = {t: [] for t in pr_steps}
+    cal_probs  = {t: [] for t in pr_steps}
+    cal_labels = {t: [] for t in pr_steps}
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    if args.plot:
+        os.makedirs(os.path.join(args.output_dir, "plots"), exist_ok=True)
+
+    # ---- Evaluation loop ----
+    seq_counter = 0
+    batch_bar   = tqdm(test_loader, desc="Evaluating", unit="batch",
+                       dynamic_ncols=True, leave=True)
+
+    for batch in batch_bar:
+        context = batch["context"].to(device)
+        target  = batch["target"].to(device)
+        ch_mask = batch["tgt_mask"][:, 0].to(device)
+
+        ens = generate_ensemble(
+            model, context, ch_mask, device,
+            n_members = args.n_members,
+            cfg_scale = args.cfg_scale,
+        )
+
+        ens_np = ens.cpu().numpy()
+        tgt_np = target.cpu().numpy()
+        ctx_np = batch["context"].numpy()
+        B      = ens_np.shape[0]
+
+        for b in range(B):
+            for t in range(T_out):
+                ens_t    = ens_np[b, :, t]
+                tgt_t    = tgt_np[b, t]
+                ens_mean = ens_t.mean(axis=0)
+
+                crps_by_step[t].append(crps_energy(ens_t, tgt_t))
+                ss_by_step[t].append(spread_skill(ens_t, tgt_t))
+
+                if cloud_idxs:
+                    cm = cloud_metrics(ens_mean, tgt_t, cloud_idxs,
+                                       cloud_chs, stats)
+                    for ch in cloud_chs:
+                        if ch in cm:
+                            rmse_by_ch_step[ch][t].append(cm[ch]["rmse"])
+                            mae_by_ch_step[ch][t].append(cm[ch]["mae"])
+                            if "ssim" in cm[ch]:
+                                ssim_by_ch_step[ch][t].append(cm[ch]["ssim"])
+
+                if li_idx is not None:
+                    pred_prob = (ens_t[:, li_idx] > args.li_threshold).mean(axis=0)
+                    obs_bin   = (tgt_t[li_idx] > args.li_threshold).astype(np.float32)
+
+                    ct = lightning_contingency(pred_prob, obs_bin)
+                    csi_by_step[t].append(ct["csi"])
+                    pod_by_step[t].append(ct["pod"])
+                    far_by_step[t].append(ct["far"])
+                    brier_by_step[t].append(brier_score(pred_prob, obs_bin))
+                    for s in fss_scales:
+                        fss_by_scale_step[s][t].append(fss(pred_prob, obs_bin, scale=s))
+
+                    if t in pr_steps:
+                        flat_prob = pred_prob.ravel()
+                        flat_lbl  = obs_bin.ravel()
+                        stride    = max(1, len(flat_prob) // 4096)
+                        pr_probs[t].append(flat_prob[::stride])
+                        pr_labels[t].append(flat_lbl[::stride])
+                        cal_probs[t].append(flat_prob[::stride])
+                        cal_labels[t].append(flat_lbl[::stride])
+
+            if args.plot and seq_counter < args.max_plots:
+                from dataset import denormalize as _denorm
+                ctx_b    = ctx_np[b]
+                last_ctx = ctx_b[-1]
+                ctx_den  = np.zeros_like(ctx_b)
+                ens_den  = np.zeros_like(ens_np[b])
+                tgt_den  = np.zeros_like(tgt_np[b])
+                for ci, ch in enumerate(channels):
+                    fn = (lambda x, _ch=ch: _denorm(x, stats, _ch)) if ch in stats                          else (lambda x: x)
+                    ctx_den[:, ci]    = fn(ctx_b[:, ci])
+                    tgt_abs           = tgt_np[b, :, ci] + last_ctx[ci]
+                    tgt_den[:, ci]    = fn(tgt_abs)
+                    for m in range(ens_np.shape[1]):
+                        ens_den[m, :, ci] = fn(ens_np[b, m, :, ci] + last_ctx[ci])
+                png = os.path.join(args.output_dir, "plots", f"eval_{seq_counter:04d}.png")
+                plot_forecast(context_np=ctx_den, ens_np=ens_den,
+                              channels=channels, gt_np=tgt_den, save_path=png)
+
+            seq_counter += 1
+
+        live_crps = float(np.mean([np.mean(v) for v in crps_by_step if v]))
+        live_csi  = float(np.mean([np.mean(v) for v in csi_by_step  if v]))                     if li_idx is not None else float("nan")
+        batch_bar.set_postfix(crps=f"{live_crps:.4f}", csi=f"{live_csi:.3f}", refresh=False)
+
+    # ---- Aggregate per-lead-time ----
+    def _mean(lst): return float(np.mean(lst)) if lst else float("nan")
+
+    lead_times = [(t + 1) * dt_min for t in range(T_out)]
+
+    # Resolve unit label per cloud channel
+    ch_unit = {}
+    for ch in cloud_chs:
+        is_cbrt = ch in stats and stats[ch].get("transform") == "cbrt"
+        ch_unit[ch] = "norm" if is_cbrt else "K"
+
+    per_step = []
+    for t in range(T_out):
+        row = {"lead_min": lead_times[t],
+               "crps":     _mean(crps_by_step[t]),
+               "spread_skill": _mean(ss_by_step[t])}
+        for ch in cloud_chs:
+            row[f"rmse_{ch}"] = _mean(rmse_by_ch_step[ch][t])
+            row[f"mae_{ch}"]  = _mean(mae_by_ch_step[ch][t])
+            if ssim_by_ch_step[ch][t]:
+                row[f"ssim_{ch}"] = _mean(ssim_by_ch_step[ch][t])
+        if li_idx is not None:
+            row.update({
+                "csi":   _mean(csi_by_step[t]),
+                "pod":   _mean(pod_by_step[t]),
+                "far":   _mean(far_by_step[t]),
+                "brier": _mean(brier_by_step[t]),
+                "fss":   _mean(fss_by_scale_step[fss_scales[len(fss_scales)//2]][t]),
+            })
+        per_step.append(row)
+
+    fss_summary = {
+        f"fss_scale{s}": _mean([_mean(fss_by_scale_step[s][t]) for t in range(T_out)])
+        for s in fss_scales
+    } if li_idx is not None else {}
+
+    # Scalar summary (mean over time for each channel)
+    summary = {
+        "checkpoint":   args.checkpoint,
+        "test_roots":   args.test_roots,
+        "n_sequences":  seq_counter,
+        "n_members":    args.n_members,
+        "crps_mean":    _mean([r["crps"] for r in per_step]),
+        "crps_1h":      _mean([r["crps"] for r in per_step[:6]]),
+        "crps_3h":      _mean([r["crps"] for r in per_step[:18]]),
+        "crps_6h":      per_step[-1]["crps"],
+        "spread_skill": _mean([r["spread_skill"] for r in per_step]),
+    }
+    for ch in cloud_chs:
+        summary[f"rmse_{ch}_mean"] = _mean([r[f"rmse_{ch}"] for r in per_step])
+        summary[f"mae_{ch}_mean"]  = _mean([r[f"mae_{ch}"]  for r in per_step])
+        ssim_vals = [r.get(f"ssim_{ch}", float("nan")) for r in per_step]
+        if not all(np.isnan(ssim_vals)):
+            summary[f"ssim_{ch}_mean"] = _mean(ssim_vals)
+    if li_idx is not None:
+        summary.update({
+            "csi_mean":   _mean([r["csi"]   for r in per_step]),
+            "csi_1h":     _mean([r["csi"]   for r in per_step[:6]]),
+            "csi_6h":     per_step[-1]["csi"],
+            "pod_mean":   _mean([r["pod"]   for r in per_step]),
+            "far_mean":   _mean([r["far"]   for r in per_step]),
+            "brier_mean": _mean([r["brier"] for r in per_step]),
+            **fss_summary,
+        })
+
+    # ---- Save JSON ----
+    json_path = os.path.join(args.output_dir, "metrics_summary.json")
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"Summary    -> {json_path}")
+
+    # ---- Save CSV ----
+    csv_path = os.path.join(args.output_dir, "metrics_per_step.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=per_step[0].keys())
+        writer.writeheader()
+        writer.writerows(per_step)
+    logger.info(f"Per-step   -> {csv_path}")
+
+    # ---- All plots ----
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.cm import get_cmap
+
+        BG, TC = "#1a1a2e", "white"
+
+        def _styled_ax(ax):
+            ax.set_facecolor(BG)
+            ax.tick_params(colors=TC)
+            ax.xaxis.label.set_color(TC)
+            ax.yaxis.label.set_color(TC)
+            ax.title.set_color(TC)
+            for s in ax.spines.values():
+                s.set_edgecolor("#555")
+
+        lt = lead_times
+
+        # ── Figure 1: Cloud skill curves — one line per channel ─────
+        # Palette for cloud channels
+        ch_palette   = ["#4fc3f7", "#f48fb1", "#aed581", "#ffb74d",
+                        "#ce93d8", "#80cbc4", "#ef9a9a", "#fff176"]
+        ch_colors    = {ch: ch_palette[i % len(ch_palette)]
+                        for i, ch in enumerate(cloud_chs)}
+
+        # Determine subplot count: RMSE, MAE, [SSIM if available], CRPS, Spread-Skill
+        has_ssim  = any(ssim_by_ch_step[ch][0] for ch in cloud_chs)
+        n_subplots = 4 + (1 if has_ssim else 0)
+        fig1, axes1 = plt.subplots(1, n_subplots, figsize=(5*n_subplots, 4.5))
+        fig1.patch.set_facecolor(BG)
+
+        def _ch_unit_label(ch):
+            return ch_unit.get(ch, "norm")
+
+        # --- RMSE per channel ---
+        ax = axes1[0]
+        for ch in cloud_chs:
+            vals = [r.get(f"rmse_{ch}", float("nan")) for r in per_step]
+            ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.8, label=ch)
+        unit_lbl = "/".join(sorted(set(ch_unit.values())))
+        ax.set_title("RMSE per channel"); ax.set_xlabel("Lead time (min)")
+        ax.set_ylabel(f"RMSE ({unit_lbl})")
+        ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
+        _styled_ax(ax)
+
+        # --- MAE per channel ---
+        ax = axes1[1]
+        for ch in cloud_chs:
+            vals = [r.get(f"mae_{ch}", float("nan")) for r in per_step]
+            ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.8, label=ch)
+        ax.set_title("MAE per channel"); ax.set_xlabel("Lead time (min)")
+        ax.set_ylabel(f"MAE ({unit_lbl})")
+        ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
+        _styled_ax(ax)
+
+        # --- SSIM per channel (optional) ---
+        ax_idx = 2
+        if has_ssim:
+            ax = axes1[ax_idx]
+            for ch in cloud_chs:
+                vals = [r.get(f"ssim_{ch}", float("nan")) for r in per_step]
+                ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.8, label=ch)
+            ax.set_ylim(0, 1)
+            ax.axhline(1.0, color="#555", linestyle=":", linewidth=0.8)
+            ax.set_title("SSIM per channel"); ax.set_xlabel("Lead time (min)")
+            ax.set_ylabel("SSIM (higher=better)")
+            ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
+            _styled_ax(ax)
+            ax_idx += 1
+
+        # --- CRPS (all channels combined) ---
+        ax = axes1[ax_idx]
+        ax.plot(lt, [r["crps"] for r in per_step], color="#4fc3f7", linewidth=1.8)
+        ax.set_title("CRPS (all channels)"); ax.set_xlabel("Lead time (min)")
+        ax.set_ylabel("CRPS (normalised)")
+        _styled_ax(ax)
+        ax_idx += 1
+
+        # --- Spread-Skill ratio ---
+        ax = axes1[ax_idx]
+        ax.plot(lt, [r["spread_skill"] for r in per_step], color="#aed581", linewidth=1.8)
+        ax.axhline(1.0, color="#ef5350", linestyle="--", linewidth=1, label="ideal=1.0")
+        ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
+        ax.set_title("Spread-Skill Ratio"); ax.set_xlabel("Lead time (min)")
+        ax.set_ylabel("Spread / Skill")
+        _styled_ax(ax)
+
+        plt.suptitle("Cloud Prediction Skill Curves", color=TC, fontsize=13)
+        plt.tight_layout()
+        cloud_path = os.path.join(args.output_dir, "skill_curves_cloud.png")
+        plt.savefig(cloud_path, dpi=130, bbox_inches="tight", facecolor=fig1.get_facecolor())
+        plt.close(fig1)
+        logger.info(f"Cloud skill     -> {cloud_path}")
+
+        if li_idx is not None:
+            import matplotlib.cm as mcm
+            import matplotlib.colors as mcolors
+
+            # One colour per lead-time step from a smooth sequential palette.
+            # With up to 36 steps the legend uses multiple columns and small
+            # markers — every step gets its own colour + label.
+            lt_cmap   = mcm.get_cmap("turbo")   # wide perceptual range, readable on dark bg
+            lt_colors = [lt_cmap(i / max(T_out - 1, 1)) for i in range(T_out)]
+
+            def _lt_legend(ax, labeled_steps, ncol=4, loc="best", extra_handles=None):
+                """Build a compact multi-column legend for the given step indices."""
+                handles = extra_handles or []
+                for t in labeled_steps:
+                    handles.append(
+                        plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
+                                   label=f"+{(t+1)*dt_min}m")
+                    )
+                ax.legend(handles=handles,
+                          facecolor="#2a2a4e", labelcolor=TC,
+                          fontsize=7.5, ncol=ncol,
+                          loc=loc, framealpha=0.9,
+                          handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
+
+            # ── Figure 2: CSI / POD / FAR / Brier vs lead time ───────
+            fig2, axes2 = plt.subplots(1, 4, figsize=(20, 4))
+            fig2.patch.set_facecolor(BG)
+            li_cfg = [
+                ([r["csi"]   for r in per_step], "#ffb74d", "CSI vs Lead Time",   "CSI"),
+                ([r["pod"]   for r in per_step], "#81c784", "POD vs Lead Time",   "POD"),
+                ([r["far"]   for r in per_step], "#e57373", "FAR vs Lead Time",   "FAR"),
+                ([r["brier"] for r in per_step], "#b39ddb", "Brier vs Lead Time", "Brier Score"),
+            ]
+            for ax, (vals, color, title, ylabel) in zip(axes2, li_cfg):
+                ax.plot(lt, vals, color=color, linewidth=1.8)
+                if ylabel in ("CSI", "POD"):
+                    ax.set_ylim(0, 1)
+                ax.set_title(title); ax.set_xlabel("Lead time (min)"); ax.set_ylabel(ylabel)
+                _styled_ax(ax)
+            plt.suptitle("Lightning Detection Skill vs Lead Time", color=TC, fontsize=13)
+            plt.tight_layout()
+            li_path = os.path.join(args.output_dir, "skill_curves_lightning.png")
+            plt.savefig(li_path, dpi=130, bbox_inches="tight", facecolor=fig2.get_facecolor())
+            plt.close(fig2)
+            logger.info(f"Lightning skill -> {li_path}")
+
+            # ── Figure 3: FSS vs neighbourhood scale — all T_out lead times ──
+            fig3, ax3 = plt.subplots(figsize=(10, 6))
+            fig3.patch.set_facecolor(BG)
+            scale_km = [s * args.pixel_size_km for s in fss_scales]
+            for t in pr_steps:
+                fss_vals = [_mean(fss_by_scale_step[s][t]) for s in fss_scales]
+                ax3.plot(scale_km, fss_vals, color=lt_colors[t],
+                         linewidth=1.2, marker="o", markersize=3, alpha=0.9)
+            skill_line = plt.Line2D([0], [0], color="#ef5350", linestyle="--",
+                                    linewidth=1.5, label="FSS = 0.5 (useful skill)")
+            ax3.axhline(0.5, color="#ef5350", linestyle="--", linewidth=1.5)
+            ax3.set_xlabel("Neighbourhood scale (km)")
+            ax3.set_ylabel("FSS")
+            ax3.set_title("FSS vs Spatial Scale", color=TC)
+            _styled_ax(ax3)
+            _lt_legend(ax3, pr_steps, ncol=4, loc="lower right",
+                       extra_handles=[skill_line])
+            plt.suptitle(f"Lightning FSS — all {T_out} lead times", color=TC, fontsize=13)
+            plt.tight_layout()
+            fss_path = os.path.join(args.output_dir, "fss_vs_scale.png")
+            plt.savefig(fss_path, dpi=130, bbox_inches="tight", facecolor=fig3.get_facecolor())
+            plt.close(fig3)
+            logger.info(f"FSS plot        -> {fss_path}")
+
+            # ── Figure 4: Precision-Recall — all T_out lead times ────
+            fig4, ax4 = plt.subplots(figsize=(10, 7))
+            fig4.patch.set_facecolor(BG)
+            thresholds  = np.linspace(0, 1, 51)
+            auc_by_step = {}
+            # Store curves for labelled steps so we don't recompute them
+            curves      = {}
+            for t in pr_steps:
+                if not pr_probs[t]:
+                    continue
+                all_prob = np.concatenate(pr_probs[t])
+                all_lbl  = np.concatenate(pr_labels[t])
+                precisions, recalls = [], []
+                for thr in thresholds:
+                    pred_b = (all_prob >= thr).astype(float)
+                    tp = (pred_b * all_lbl).sum()
+                    fp = (pred_b * (1 - all_lbl)).sum()
+                    fn = ((1 - pred_b) * all_lbl).sum()
+                    precisions.append(tp / (tp + fp + 1e-8))
+                    recalls.append(tp / (tp + fn + 1e-8))
+                auc = float(np.trapz(precisions[::-1], recalls[::-1]))
+                auc_by_step[t] = auc
+                curves[t] = (recalls, precisions)
+                ax4.plot(recalls, precisions, color=lt_colors[t],
+                         linewidth=1.2, alpha=0.9)
+            ax4.set_xlabel("Recall (POD)")
+            ax4.set_ylabel("Precision (1 − FAR)")
+            ax4.set_title("Precision-Recall Curves", color=TC)
+            ax4.set_xlim(0, 1); ax4.set_ylim(0, 1)
+            _styled_ax(ax4)
+            # Legend: include AUC in the label for every step
+            handles_pr = [
+                plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
+                           label=f"+{(t+1)*dt_min}m  AUC={auc_by_step[t]:.2f}")
+                for t in pr_steps if t in auc_by_step
+            ]
+            ax4.legend(handles=handles_pr,
+                       facecolor="#2a2a4e", labelcolor=TC,
+                       fontsize=7.5, ncol=4, loc="upper right",
+                       framealpha=0.9, handlelength=1.4,
+                       columnspacing=0.8, handletextpad=0.4)
+            plt.suptitle(f"Lightning PR Curves — all {T_out} lead times", color=TC, fontsize=13)
+            plt.tight_layout()
+            pr_path = os.path.join(args.output_dir, "precision_recall.png")
+            plt.savefig(pr_path, dpi=130, bbox_inches="tight", facecolor=fig4.get_facecolor())
+            plt.close(fig4)
+            logger.info(f"PR curve        -> {pr_path}")
+
+            # ── Figure 5: Reliability diagram — all T_out lead times ─
+            n_bins      = 10
+            bin_edges   = np.linspace(0, 1, n_bins + 1)
+            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+            fig5, ax5 = plt.subplots(figsize=(10, 7))
+            fig5.patch.set_facecolor(BG)
+            diag_line = plt.Line2D([0], [0], color="white", linestyle="--",
+                                   linewidth=1.5, alpha=0.6, label="Perfect calibration")
+            ax5.plot([0, 1], [0, 1], color="white", linestyle="--",
+                     linewidth=1.5, alpha=0.6, zorder=5)
+            for t in pr_steps:
+                if not cal_probs[t]:
+                    continue
+                all_prob = np.concatenate(cal_probs[t])
+                all_lbl  = np.concatenate(cal_labels[t])
+                bin_idx  = np.digitize(all_prob, bin_edges[1:-1])
+                obs_freq = np.full(n_bins, np.nan)
+                for b in range(n_bins):
+                    mask = bin_idx == b
+                    if mask.sum() > 10:
+                        obs_freq[b] = all_lbl[mask].mean()
+                valid = ~np.isnan(obs_freq)
+                ax5.plot(bin_centers[valid], obs_freq[valid],
+                         color=lt_colors[t], linewidth=1.2,
+                         marker="o", markersize=3, alpha=0.9)
+            ax5.set_xlabel("Mean predicted probability")
+            ax5.set_ylabel("Observed frequency")
+            ax5.set_title("Reliability Diagram", color=TC)
+            ax5.set_xlim(0, 1); ax5.set_ylim(0, 1)
+            _styled_ax(ax5)
+            _lt_legend(ax5, pr_steps, ncol=4, loc="upper left",
+                       extra_handles=[diag_line])
+            plt.suptitle(f"Lightning Calibration — all {T_out} lead times", color=TC, fontsize=13)
+            plt.tight_layout()
+            cal_path = os.path.join(args.output_dir, "calibration.png")
+            plt.savefig(cal_path, dpi=130, bbox_inches="tight", facecolor=fig5.get_facecolor())
+            plt.close(fig5)
+            logger.info(f"Calibration     -> {cal_path}")
+
+    except Exception as e:
+        import traceback
+        logger.warning(f"Could not save plots: {e}")
+        logger.warning(traceback.format_exc())
+
+    # ---- Print summary ----
+    logger.info("\n" + "=" * 52)
+    logger.info("  CLOUD METRICS")
+    logger.info("=" * 52)
+    for k in ["crps_mean","crps_1h","crps_3h","crps_6h",
+              "rmse_mean","mae_mean","ssim_mean","spread_skill"]:
+        if k in summary:
+            logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+    if li_idx is not None:
+        logger.info("\n" + "=" * 52)
+        logger.info("  LIGHTNING METRICS")
+        logger.info("=" * 52)
+        for k in ["csi_mean","csi_1h","csi_6h","pod_mean",
+                  "far_mean","brier_mean"]:
+            if k in summary:
+                logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+        for k in sorted([k for k in summary if k.startswith("fss_scale")]):
+            logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+    logger.info("=" * 52)
+
+    return summary
+
+
+# ===================================================================
+# Entry point
+# ===================================================================
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser(
+        description="Run full test-set evaluation on a trained METSAT nowcasting model."
+    )
+    p.add_argument("--checkpoint",    required=True,
+                   help="Path to best.pt or latest.pt")
+    p.add_argument("--test_roots",    required=True, nargs="+",
+                   help="One or more dataset root directories for the test set")
+    p.add_argument("--output_dir",    default="outputs/evaluation",
+                   help="Directory to write metrics, CSV and plots")
+    p.add_argument("--n_members",     type=int,   default=10,
+                   help="Ensemble members (more = slower but better CRPS)")
+    p.add_argument("--cfg_scale",     type=float, default=1.5)
+    p.add_argument("--batch_size",    type=int,   default=4)
+    p.add_argument("--num_workers",   type=int,   default=4)
+    p.add_argument("--img_size",      nargs=2, type=int, default=[256, 256])
+    p.add_argument("--li_threshold",  type=float, default=0.1,
+                   help="Normalised LI threshold for binary metrics")
+    p.add_argument("--gpu",           type=int,   default=0)
+    p.add_argument("--plot",          action="store_true",
+                   help="Save full forecast PNGs for each test sequence")
+    p.add_argument("--max_plots",     type=int,   default=20)
+    p.add_argument("--fss_scales",    nargs="+", type=int,
+                   default=[1, 2, 4, 8, 16, 32],
+                   help="Neighbourhood half-widths (pixels) for FSS curve")
+    p.add_argument("--pixel_size_km", type=float, default=4.0,
+                   help="Pixel size in km — used to label FSS x-axis in km")
+    args = p.parse_args()
+    run_test_evaluation(args)

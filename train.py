@@ -297,20 +297,60 @@ def train(args):
         opt.load_state_dict(ckpt["opt"])
         if main and ema is not None and "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
-        start_epoch = ckpt["epoch"] + 1
-        best_val    = ckpt.get("best_val", best_val)
-        if main:
-            logger.info(f"Resumed from epoch {start_epoch}")
 
-    # Build scheduler AFTER resume so last_epoch is set correctly.
-    # This prevents the "step() before optimizer.step()" false-positive warning.
+        if args.extend:
+            # --extend: weights + opt loaded, but start a fresh training phase.
+            # - Epoch counter resets to 0
+            # - LR scheduler gets a brand-new cosine cycle from args.lr
+            # - best_val resets so a new best.pt is written for this phase
+            # - Output dir gets a _ext1 / _ext2 suffix so nothing is overwritten
+            start_epoch = 0
+            best_val    = float("inf")
+
+            # Fix the LR in every param group back to args.lr.
+            # opt.load_state_dict() above restored the stale LR from the end
+            # of the previous run (≈ eta_min ≈ lr*0.01).  We keep the Adam
+            # moment buffers (warm start) but reset the learning rate so the
+            # new cosine cycle starts from the correct peak.
+            for pg in opt.param_groups:
+                pg["lr"] = args.lr
+
+            import re
+            base = args.output_dir.rstrip("/")
+            m    = re.match(r"^(.*?)(_ext(\d+))?$", base)
+            prev = int(m.group(3) or 0)
+            args.output_dir = f"{m.group(1)}_ext{prev + 1}"
+            os.makedirs(args.output_dir, exist_ok=True)
+            ckpt_path = os.path.join(args.output_dir, "latest.pt")
+            if main:
+                logger.info(
+                    f"Extend mode: weights loaded, Adam moments kept, "
+                    f"LR reset to {args.lr}, new output dir: {args.output_dir}"
+                )
+        else:
+            # Normal resume: continue epoch counter from checkpoint.
+            start_epoch = ckpt["epoch"] + 1
+            best_val    = ckpt.get("best_val", best_val)
+            if main:
+                logger.info(f"Resumed from epoch {start_epoch - 1} "
+                            f"(continuing to epoch {args.epochs - 1})")
+                if start_epoch >= args.epochs:
+                    logger.warning(
+                        f"start_epoch ({start_epoch}) >= args.epochs ({args.epochs}). "
+                        "Nothing to do — did you forget to increase --epochs?"
+                    )
+
+    # Build scheduler AFTER resume.
+    # In extend mode start_epoch=0 so this is identical to a fresh run.
+    # In normal resume last_epoch>0 so the cosine curve continues correctly.
     sched = CosineAnnealingLR(
         opt,
-        T_max    = args.epochs,
-        eta_min  = args.lr * 0.01,
-        last_epoch = start_epoch - 1,   # -1 means "not yet stepped"; >0 on resume
+        T_max      = args.epochs,
+        eta_min    = args.lr * 0.01,
+        last_epoch = start_epoch - 1,   # -1 = fresh; >0 = mid-curve resume
     )
-    if args.resume and os.path.exists(ckpt_path) and "sched" in ckpt:
+    # Restore scheduler state only for plain resume (not extend).
+    if args.resume and not args.extend and os.path.exists(ckpt_path) and "sched" in ckpt:
         sched.load_state_dict(ckpt["sched"])
 
     # ----- WandB (rank 0 only) -----

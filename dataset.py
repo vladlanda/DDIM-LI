@@ -219,13 +219,17 @@ def build_index(root: str,
             index[start_dt] = chs
 
     # --- Save cache ---
-    cache_data = {
-        dt.isoformat(): {ch: str(p) for ch, p in chs.items()}
-        for dt, chs in index.items()
-    }
-    with open(cache_path, "w") as f:
-        json.dump(cache_data, f)
-    logger.info(f"  Index cached → {cache_path}  ({len(index)} valid timesteps)")
+    # NOTE: Caching is disabled — uncomment if filesystem scanning is slow
+    # (e.g. USB/network drives). On a local SSD the scan is fast enough.
+    # cache_data = {
+    #     dt.isoformat(): {ch: str(p) for ch, p in chs.items()}
+    #     for dt, chs in index.items()
+    # }
+    # with open(cache_path, "w") as f:
+    #     json.dump(cache_data, f)
+    # logger.info(f"  Index cached → {cache_path}  ({len(index)} valid timesteps)")
+
+    logger.info(f"  Index built: {len(index)} valid timesteps")
 
     return index
 
@@ -540,16 +544,38 @@ def make_test_loader(
     max_samples:  Optional[int] = None,
 ):
     """
-    Loader for the held-out test regions (val_roots in the config).
+    Loader for the held-out test regions.
     Only call this after training is complete.
     Stats must be passed in from the training set — never refit on test data.
+
+    Sequences are made fully non-overlapping by striding valid_sequences by
+    (T_in + T_out).  This ensures that no two test sequences share any frames,
+    giving independent CRPS/CSI samples and honest confidence intervals.
     """
+    stride = T_in + T_out   # e.g. 6+36=42 — full sequence length
+
     test_ds = MultiRegionDataset(
         test_roots, channel_list=channel_list,
         T_in=T_in, T_out=T_out, img_size=img_size,
         stats=stats, augment=False,
         max_samples=max_samples,
     )
+
+    # Apply non-overlapping stride per region dataset
+    total_before = sum(len(ds.valid_sequences) for ds in test_ds.datasets)
+    for ds in test_ds.datasets:
+        ds.valid_sequences = ds.valid_sequences[::stride]
+    total_after = sum(len(ds.valid_sequences) for ds in test_ds.datasets)
+
+    logger.info(
+        f"Test loader: {total_before} → {total_after} sequences "
+        f"after non-overlapping stride={stride} (T_in={T_in} + T_out={T_out})"
+    )
+
+    # Rebuild _ConcatDS lengths after stride
+    test_ds.lengths = [len(ds.valid_sequences) for ds in test_ds.datasets]
+    test_ds.cumlen  = np.cumsum([0] + test_ds.lengths)
+
     return DataLoader(
         test_ds, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
