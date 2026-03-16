@@ -56,7 +56,7 @@ from model import (
     UNet, EDMPrecond, MultiStepDenoiser,
     EDMSchedule, edm_training_loss,
 )
-from evaluate import evaluate_epoch
+from evaluate import evaluate_epoch, fast_val_metrics
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -299,19 +299,45 @@ def train(args):
             ema.load_state_dict(ckpt["ema"])
 
         if args.extend:
-            # --extend: weights + opt loaded, but start a fresh training phase.
-            # - Epoch counter resets to 0
-            # - LR scheduler gets a brand-new cosine cycle from args.lr
-            # - best_val resets so a new best.pt is written for this phase
-            # - Output dir gets a _ext1 / _ext2 suffix so nothing is overwritten
+            # --extend: start a fresh training phase from the BEST checkpoint.
+            #
+            # Loading strategy:
+            #   model + ema  <- best.pt   (best generalisation, not last epoch)
+            #   opt          <- best.pt   (Adam moments from the best point)
+            #
+            # best.pt is preferred over latest.pt because at the end of a
+            # cosine cycle the model trained at eta_min may be slightly worse
+            # than the best validation checkpoint.
+            #
+            # After loading we:
+            #   - reset epoch counter to 0
+            #   - patch param_groups["lr"] back to args.lr  (load_state_dict
+            #     restores the stale LR from the checkpoint, typically ~lr*0.01)
+            #   - reset best_val so a new best.pt is written for this phase
+            #   - redirect output to <output_dir>_ext1 (then _ext2, …)
+
+            best_path = os.path.join(
+                os.path.dirname(ckpt_path), "best.pt"
+            )
+            if os.path.exists(best_path):
+                best_ckpt = torch.load(best_path, map_location=device)
+                raw_model.load_state_dict(best_ckpt["model"])
+                if main and ema is not None and "ema" in best_ckpt:
+                    ema.load_state_dict(best_ckpt["ema"])
+                if "opt" in best_ckpt:
+                    opt.load_state_dict(best_ckpt["opt"])
+                src_label = "best.pt"
+            else:
+                # best.pt missing (e.g. val was never run) — fall back to
+                # the already-loaded latest.pt weights/opt
+                src_label = "latest.pt (best.pt not found)"
+
             start_epoch = 0
             best_val    = float("inf")
 
-            # Fix the LR in every param group back to args.lr.
-            # opt.load_state_dict() above restored the stale LR from the end
-            # of the previous run (≈ eta_min ≈ lr*0.01).  We keep the Adam
-            # moment buffers (warm start) but reset the learning rate so the
-            # new cosine cycle starts from the correct peak.
+            # Patch LR: load_state_dict restores the stale end-of-run LR
+            # (~lr*0.01).  Reset every param group to the requested peak LR
+            # so the new cosine cycle starts correctly.
             for pg in opt.param_groups:
                 pg["lr"] = args.lr
 
@@ -324,8 +350,9 @@ def train(args):
             ckpt_path = os.path.join(args.output_dir, "latest.pt")
             if main:
                 logger.info(
-                    f"Extend mode: weights loaded, Adam moments kept, "
-                    f"LR reset to {args.lr}, new output dir: {args.output_dir}"
+                    f"Extend mode: weights from {src_label}, "
+                    f"Adam moments kept, LR reset to {args.lr}, "
+                    f"new output dir: {args.output_dir}"
                 )
         else:
             # Normal resume: continue epoch counter from checkpoint.
@@ -356,6 +383,22 @@ def train(args):
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
         wandb.init(project=args.wandb_project, config=vars(args))
+
+    # ----- Baseline validation (extend mode only) -----
+    # Run one validation pass before any gradient steps so that wandb shows
+    # the starting quality of the loaded weights as epoch 0 (logged as
+    # epoch=-1 to distinguish it from the first real training epoch).
+    # This avoids needing a separate evaluation script or output folder.
+    if args.extend and main:
+        logger.info("Extend mode: running baseline validation before training ...")
+        baseline_metrics = fast_val_metrics(
+            raw_model, val_loader, schedule, device,
+            channels    = channels,
+            val_samples = args.val_samples,
+        )
+        logger.info(f"  Baseline (pre-extend): {baseline_metrics}")
+        if HAS_WANDB and args.wandb_project:
+            wandb.log({"epoch": -1, "phase": "baseline", **baseline_metrics})
 
     # ----- Main loop -----
     epoch_bar = tqdm(
@@ -436,24 +479,43 @@ def train(args):
             dist.barrier()
 
         # ----- Validation (rank 0 only) -----
+        # Every epoch: cheap fast_val_metrics (one forward pass per batch,
+        #              random σ sampled from the EDM log-normal distribution).
+        #              val_loss is directly comparable to train_loss.
+        # Every val_every epochs: full probabilistic evaluate_epoch
+        #              (ensemble generation with ODE solver → CRPS, CSI, …).
         val_metrics = {}
+        if main:
+            fast_metrics = fast_val_metrics(
+                raw_model, val_loader, schedule, device,
+                channels    = channels,
+                val_samples = args.val_samples,
+            )
+            val_metrics.update(fast_metrics)
+
         if main and epoch % args.val_every == 0:
-            val_metrics = evaluate_epoch(
+            slow_metrics = evaluate_epoch(
                 raw_model, val_loader, schedule, device,
                 stats       = stats,
                 channels    = channels,
                 n_members   = args.n_members,
-                num_samples = args.val_samples,
-                val_subset  = args.val_subset,
+                val_samples = args.val_samples,
                 dt_min      = args.dt_min,
             )
+            val_metrics.update(slow_metrics)
             val_crps = val_metrics.get("crps_mean", float("inf"))
 
-            if val_crps < best_val:
+            if val_crps < best_val and val_crps < float("inf"):
                 best_val = val_crps
                 torch.save(
-                    {"model": raw_model.state_dict(), "ema": ema.state_dict() if ema else {},
-                     "stats": stats, "channels": channels, "args": vars(args)},
+                    {"model":    raw_model.state_dict(),
+                     "ema":      ema.state_dict() if ema else {},
+                     "opt":      opt.state_dict(),
+                     "epoch":    epoch,
+                     "best_val": best_val,
+                     "stats":    stats,
+                     "channels": channels,
+                     "args":     vars(args)},
                     os.path.join(args.output_dir, "best.pt"),
                 )
                 logger.info(f"  ↑ New best CRPS: {best_val:.4f}")

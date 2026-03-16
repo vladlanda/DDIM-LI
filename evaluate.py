@@ -244,20 +244,18 @@ def evaluate_epoch(
     stats:        Dict,
     channels:     List[str],
     n_members:    int   = 10,
-    num_samples:  int   = 5,       # number of BATCHES to evaluate on
+    val_samples:  int   = -1,      # batches to evaluate; -1 = full val set
     cfg_scale:    float = 1.5,
     li_threshold: float = 0.1,
     dt_min:       int   = 10,
-    val_subset:   Optional[int] = None,  # randomly sample this many batches from
-                                         # the loader; None = use num_samples sequentially
 ) -> Dict[str, float]:
     """
-    Run probabilistic evaluation on a random subset of val_loader.
+    Run probabilistic evaluation on val_loader.
 
-    val_subset: if set, randomly picks val_subset batch indices from the full
-                val_loader instead of always taking the first num_samples batches.
-                This avoids always evaluating on the same temporal window.
-    num_samples: how many batches to actually evaluate (the budget).
+    val_samples: number of batches to evaluate.
+                 -1 (default) = use the entire val loader.
+                 >0 = randomly sample that many batches without replacement,
+                      so the evaluation window varies each time it is called.
     """
     model.eval()
     li_idx = channels.index("li") if "li" in channels else None
@@ -265,13 +263,15 @@ def evaluate_epoch(
 
     # --- Build the list of batch indices to evaluate ---
     total_batches = len(val_loader)
-    if val_subset is not None and val_subset < total_batches:
-        # Random sample without replacement across the full val set
-        chosen = sorted(random.sample(range(total_batches), val_subset))
-        budget = val_subset
+    if val_samples == -1 or val_samples >= total_batches:
+        # Use the full val set sequentially
+        chosen = None
+        budget = total_batches
     else:
-        chosen = None          # sequential from start
-        budget = min(num_samples, total_batches)
+        # Randomly sample val_samples batches without replacement so the
+        # evaluation window varies each call
+        chosen = set(random.sample(range(total_batches), val_samples))
+        budget = val_samples
 
     all_crps, all_csi, all_ss = [], [], []
 
@@ -289,6 +289,7 @@ def evaluate_epoch(
         # Skip batches not in our random sample
         if chosen is not None and batch_idx not in chosen:
             continue
+
 
         if evaluated >= budget:
             break
@@ -359,6 +360,126 @@ def evaluate_epoch(
             "csi_1h":   float(all_csi[:, :6].mean()) if T_out >= 6 else float(all_csi.mean()),
             "csi_6h":   float(all_csi[:, -1].mean()),
         })
+
+    return metrics
+
+
+# ===================================================================
+# Fast validation — cheap training-time quality proxy
+# ===================================================================
+
+@torch.no_grad()
+def fast_val_metrics(
+    model:        "MultiStepDenoiser",
+    val_loader:   "DataLoader",
+    schedule:     "EDMSchedule",
+    device:       "torch.device",
+    channels:     List[str],
+    val_samples:  int   = -1,      # batches to use; -1 = full val set
+    li_threshold: float = 0.1,
+) -> Dict[str, float]:
+    """
+    Cheap validation metrics for use every training epoch.
+
+    No ODE solver, no ensemble generation — just one forward pass per batch.
+
+    For each batch:
+      1. Sample σ from the EDM log-normal distribution (same as training),
+         one σ per batch item.
+      2. Add noise at that σ to a randomly chosen target lead-time frame.
+      3. Run one denoiser forward pass and measure:
+           - val_loss   : full EDM-weighted loss (comparable to train_loss)
+           - val_mse    : unweighted pixel MSE between denoised output
+                          and clean target (interpretable in normalised units)
+           - val_mae    : mean absolute error
+           - val_li_mse : MSE on the LI channel only (if present)
+
+    val_samples: -1 = use the full val loader every epoch (most accurate,
+                      slower for large val sets).
+                 >0 = randomly sample that many batches (faster, still
+                      unbiased in expectation across epochs).
+
+    Using the same σ distribution as training means val_loss is directly
+    comparable to train_loss — the gap is the overfitting signal.
+    """
+    from model import EDMSchedule as _EDMSchedule
+    model.eval()
+
+    li_idx     = channels.index("li") if "li" in channels else None
+    cloud_idxs = [i for i, ch in enumerate(channels) if ch != "li"]
+
+    val_losses, val_mses, val_maes, val_li_mses = [], [], [], []
+
+    total_batches = len(val_loader)
+    if val_samples == -1 or val_samples >= total_batches:
+        chosen_fast = None
+        budget_fast = total_batches
+    else:
+        chosen_fast = set(random.sample(range(total_batches), val_samples))
+        budget_fast = val_samples
+
+    evaluated = 0
+    for batch_idx, batch in enumerate(val_loader):
+        if chosen_fast is not None and batch_idx not in chosen_fast:
+            continue
+        if evaluated >= budget_fast:
+            break
+
+        context  = batch["context"].to(device)   # (B, T_in, C, H, W)
+        target   = batch["target"].to(device)    # (B, T_out, C, H, W)
+        tgt_mask = batch["tgt_mask"].to(device)  # (B, T_out, C)
+
+        B, T_out, C, H, W = target.shape
+
+        # Sample a random lead step per batch item — mirrors training
+        lead_idx = torch.randint(0, T_out, (B,), device=device)
+        y        = target[torch.arange(B), lead_idx]      # (B, C, H, W)
+        ch_mask  = tgt_mask[torch.arange(B), lead_idx]    # (B, C)
+
+        # Sample σ from the EDM log-normal — same distribution as training
+        sigma = schedule.sample_sigma(B, device)           # (B,)
+
+        # Add noise
+        x_noisy = y + torch.randn_like(y) * sigma[:, None, None, None]
+
+        # One denoiser forward pass (no CFG dropout at val time)
+        pred = model(x_noisy, sigma, context, ch_mask, lead_idx)  # (B, C, H, W)
+
+        # ----- val_loss: EDM-weighted MSE (comparable to train loss) -----
+        from model import channel_weighted_mse, spectral_loss
+        lw   = schedule.edm_loss_weight(sigma)[:, None, None, None]
+        loss = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, li_weight=3.0)
+        val_losses.append(loss.item())
+
+        # ----- val_mse / val_mae: unweighted, interpretable pixel errors -----
+        with torch.no_grad():
+            err      = (pred - y)                               # (B, C, H, W)
+            # Only score channels that are present (ch_mask=1)
+            mask_hw  = ch_mask[:, :, None, None].float()        # (B, C, 1, 1)
+            mse_per  = (err ** 2 * mask_hw).sum() / (mask_hw.sum() * H * W + 1e-8)
+            mae_per  = (err.abs() * mask_hw).sum() / (mask_hw.sum() * H * W + 1e-8)
+            val_mses.append(mse_per.item())
+            val_maes.append(mae_per.item())
+
+            # LI-specific MSE
+            if li_idx is not None:
+                li_err   = err[:, li_idx]                       # (B, H, W)
+                li_mask  = ch_mask[:, li_idx].float()           # (B,)
+                li_mse   = (li_err ** 2).mean(dim=(-2, -1))    # (B,)
+                li_mse_m = (li_mse * li_mask).sum() / (li_mask.sum() + 1e-8)
+                val_li_mses.append(li_mse_m.item())
+
+        evaluated += 1
+
+    def _m(lst): return float(np.mean(lst)) if lst else float("nan")
+
+    metrics = {
+        "val_loss": _m(val_losses),   # EDM-weighted, comparable to train_loss
+        "val_mse":  _m(val_mses),     # unweighted pixel MSE
+        "val_mae":  _m(val_maes),     # unweighted pixel MAE
+    }
+    if val_li_mses:
+        metrics["val_li_mse"] = _m(val_li_mses)
 
     return metrics
 

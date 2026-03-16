@@ -207,3 +207,10 @@ python train.py --config configs/default.yaml
 
 # Resume DDP training
 torchrun --nproc_per_node=2 train.py --config configs/default.yaml --resume true
+
+
+## Training Extension
+chmod +x extend.sh
+
+# Basic — skip eval (no test data specified)
+./extend.sh --output_dir outputs/run1 --epochs 50
