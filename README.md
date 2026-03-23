@@ -214,3 +214,27 @@ chmod +x extend.sh
 
 # Basic — skip eval (no test data specified)
 ./extend.sh --output_dir outputs/run1 --epochs 50
+
+## Evaluate
+# Basic evaluation
+    python evaluate.py \
+        --checkpoint outputs/run1/best.pt \
+        --test_roots /media/vladlanda/T5EVO/.../central_africa_4 \
+        --output_dir outputs/eval_run1
+
+# With plots (saves up to 20 forecast PNGs)
+    python evaluate.py \
+        --checkpoint outputs/run1/best.pt \
+        --test_roots /media/vladlanda/T5EVO/.../central_africa_4 \
+        --output_dir outputs/eval_run1 \
+        --n_members 10 \
+        --plot --max_plots 20
+
+# choosing scales <- <- <- <- <- <- <- <- <- <- <- 
+    python evaluate.py \
+        --checkpoint outputs/run1/best.pt \
+        --test_roots /media/vladlanda/.../central_africa_4 \
+        --output_dir outputs/eval_run1 \
+        --n_members 10 \
+        --fss_scales 1 2 4 8 16 32 \
+        --pixel_size_km 4.0

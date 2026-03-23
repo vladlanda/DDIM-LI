@@ -24,7 +24,7 @@ test_roots:
 
 # First 70% of each region's sequences → train, last 30% → val.
 # Split is temporal (chronological), not random.
-train_val_split: 0.7
+train_val_split: 0.8
  
 channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
   - ir
@@ -33,9 +33,9 @@ channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
   - ch1
  
 T_in:    6          # context frames  (6 × 10 min = 1 hour)
-T_out:   36         # forecast steps  (36 × 10 min = 6 hours)
+T_out:   6         # forecast steps  (36 × 10 min = 6 hours)
 dt_min:  10         # minutes between frames
-img_size: [256, 256]
+img_size: [64, 64]
  
 # Set to a small integer (e.g. 50) to load only a subset of sequences.
 # Useful for quickly verifying the pipeline works before a full training run.
@@ -69,7 +69,7 @@ sigma_max:  80.0
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
 epochs:         200
-batch_size:     4
+batch_size:     128
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
@@ -85,12 +85,13 @@ li_weight:        3.0      # upweight lightning channel in MSE
 # ----------------------------------------------------------
 # Validation & logging
 # ----------------------------------------------------------
+slow_val:     false         # set false to skip ODE-solver eval during exploratory runs
 val_every:    5            # run full ensemble validation every N epochs
 val_samples:  -1           # batches for both fast (every epoch) and slow (every val_every) val
                            # -1 = full val set; >0 = random sample of that many batches
 n_members:    1            # ensemble members during validation (1 = fast, 10 = full probabilistic)
 cfg_scale:    1.5          # classifier-free guidance scale at inference
  
-output_dir:      outputs/run_1h_dim128
+output_dir:      outputs/h1_dim64
 resume:          true
 wandb_project:   "DDIM-LI"        # set to your project name to enable WandB

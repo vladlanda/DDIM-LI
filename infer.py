@@ -9,6 +9,13 @@ Usage:
         --n_members  20 \
         --cfg_scale  1.5 \
         --plot
+    python infer.py \
+        --checkpoint outputs/h1_dim64/best.pt \
+        --data_dir   /home/vladlanda/Workplace/LI-DATASETS/inference/central_africa_4/ \
+        --output_dir outputs/forecast/h1_dim64 \
+        --n_members  20 \
+        --cfg_scale  1.5 \
+        --plot
 
     Pass --use_gt to also load ground-truth future frames (if available)
     and include them in the plots.

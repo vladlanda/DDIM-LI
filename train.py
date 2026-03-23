@@ -382,23 +382,23 @@ def train(args):
 
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
-        wandb.init(project=args.wandb_project, config=vars(args))
+        wandb.init(project=args.wandb_project, name=os.path.basename(args.output_dir.rstrip("/")), config=vars(args))
 
     # ----- Baseline validation (extend mode only) -----
-    # Run one validation pass before any gradient steps so that wandb shows
-    # the starting quality of the loaded weights as epoch 0 (logged as
-    # epoch=-1 to distinguish it from the first real training epoch).
-    # This avoids needing a separate evaluation script or output folder.
-    if args.extend and main:
-        logger.info("Extend mode: running baseline validation before training ...")
+    # Both ranks run fast_val_metrics (all_reduce inside requires all ranks).
+    # Only rank 0 logs the result.
+    if args.extend:
+        if main:
+            logger.info("Extend mode: running baseline validation before training ...")
         baseline_metrics = fast_val_metrics(
             raw_model, val_loader, schedule, device,
             channels    = channels,
             val_samples = args.val_samples,
         )
-        logger.info(f"  Baseline (pre-extend): {baseline_metrics}")
-        if HAS_WANDB and args.wandb_project:
-            wandb.log({"epoch": -1, "phase": "baseline", **baseline_metrics})
+        if main:
+            logger.info(f"  Baseline (pre-extend): {baseline_metrics}")
+            if HAS_WANDB and args.wandb_project:
+                wandb.log({"epoch": -1, "phase": "baseline", **baseline_metrics})
 
     # ----- Main loop -----
     epoch_bar = tqdm(
@@ -472,28 +472,32 @@ def train(args):
                 refresh = False,
             )
 
-        # ----- Sync all ranks before potentially slow validation -----
-        # Without this, rank 1 would reach the end-of-epoch barrier while
-        # rank 0 is still inside evaluate_epoch(), causing NCCL timeout.
+        # ----- Validation (rank 0 only, both ranks must wait) -----
+        # Pattern: barrier → rank 0 does work → barrier.
+        # Rank 1 does nothing between the two barriers — it just idles.
+        # This is the only safe pattern for asymmetric work in DDP: both
+        # ranks must enter and exit each barrier together, so all validation
+        # (fast AND slow) must sit between one pair of barriers.
+        # Putting a second validation call outside this pair is what caused
+        # the previous NCCL timeout (NumelIn=1 ALLREDUCE).
+        # ----- Validation (all ranks) + checkpoint (rank 0) -----
+        # Both ranks run validation in parallel on their own val_loader shard.
+        # fast_val_metrics / evaluate_epoch all_reduce results internally, so
+        # only rank 0 receives the final dict; other ranks get {}.
+        # Checkpoint and logging remain rank-0-only.
+        # ONE barrier before, ONE after — rank 0 may be slower due to I/O.
         if ddp_active():
             dist.barrier()
 
-        # ----- Validation (rank 0 only) -----
-        # Every epoch: cheap fast_val_metrics (one forward pass per batch,
-        #              random σ sampled from the EDM log-normal distribution).
-        #              val_loss is directly comparable to train_loss.
-        # Every val_every epochs: full probabilistic evaluate_epoch
-        #              (ensemble generation with ODE solver → CRPS, CSI, …).
-        val_metrics = {}
-        if main:
-            fast_metrics = fast_val_metrics(
-                raw_model, val_loader, schedule, device,
-                channels    = channels,
-                val_samples = args.val_samples,
-            )
-            val_metrics.update(fast_metrics)
+        # Every epoch: cheap forward-pass denoising metrics (both ranks).
+        val_metrics = fast_val_metrics(
+            raw_model, val_loader, schedule, device,
+            channels    = channels,
+            val_samples = args.val_samples,
+        )
 
-        if main and epoch % args.val_every == 0:
+        # Every val_every epochs: full probabilistic eval (both ranks).
+        if args.slow_val and epoch % args.val_every == 0:
             slow_metrics = evaluate_epoch(
                 raw_model, val_loader, schedule, device,
                 stats       = stats,
@@ -503,10 +507,12 @@ def train(args):
                 dt_min      = args.dt_min,
             )
             val_metrics.update(slow_metrics)
-            val_crps = val_metrics.get("crps_mean", float("inf"))
 
-            if val_crps < best_val and val_crps < float("inf"):
-                best_val = val_crps
+        # Checkpoint + logging — rank 0 only.
+        if main:
+            val_loss = val_metrics.get("val_loss", float("inf"))
+            if val_loss < best_val and val_loss < float("inf"):
+                best_val = val_loss
                 torch.save(
                     {"model":    raw_model.state_dict(),
                      "ema":      ema.state_dict() if ema else {},
@@ -518,17 +524,15 @@ def train(args):
                      "args":     vars(args)},
                     os.path.join(args.output_dir, "best.pt"),
                 )
-                logger.info(f"  ↑ New best CRPS: {best_val:.4f}")
+                logger.info(f"  ↑ New best val_loss: {best_val:.4f}")
 
-        # ----- Checkpoint (rank 0 only) -----
-        if main:
             torch.save({
-                "epoch":     epoch,
-                "model":     raw_model.state_dict(),
-                "ema":       ema.state_dict() if ema else {},
-                "opt":       opt.state_dict(),
-                "sched":     sched.state_dict(),
-                "best_val":  best_val,
+                "epoch":    epoch,
+                "model":    raw_model.state_dict(),
+                "ema":      ema.state_dict() if ema else {},
+                "opt":      opt.state_dict(),
+                "sched":    sched.state_dict(),
+                "best_val": best_val,
             }, ckpt_path)
 
             log_dict = {"epoch": epoch, "train_loss": avg_loss,
@@ -539,7 +543,6 @@ def train(args):
             if HAS_WANDB and args.wandb_project:
                 wandb.log(log_dict)
 
-        # ----- Sync before next epoch (rank 0 finishes checkpoint first) -----
         if ddp_active():
             dist.barrier()
 

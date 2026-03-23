@@ -294,30 +294,39 @@ def evaluate_epoch(
         if evaluated >= budget:
             break
 
-        context = batch["context"].to(device)
-        target  = batch["target"].to(device)
-        ch_mask = batch["tgt_mask"][:, 0].to(device)
+        context  = batch["context"].to(device)
+        target   = batch["target"].to(device)       # (B, T_out, C, H, W) residuals
+        last_ctx = batch["last_ctx"].to(device)     # (B, C, H, W) last context frame
+        # Use per-timestep channel mask (not just step 0)
+        tgt_mask = batch["tgt_mask"].to(device)     # (B, T_out, C)
+        ch_mask  = tgt_mask[:, 0]                   # (B, C) for ensemble generation
 
         ens = generate_ensemble(
             model, context, ch_mask, device,
             n_members=n_members, cfg_scale=cfg_scale,
-        )  # (B, M, T_out, C, H, W)
+        )  # (B, M, T_out, C, H, W)  — model output is residuals
 
-        ens_np = ens.cpu().numpy()
-        tgt_np = target.cpu().numpy()
-        B      = ens_np.shape[0]
+        # Reconstruct absolute frames: residual + last context frame
+        # Both ens and target are in normalised residual space.
+        # Adding last_ctx (also normalised) gives normalised absolute values,
+        # which is the correct space for thresholding and physical metrics.
+        last_ctx_np = last_ctx.cpu().numpy()          # (B, C, H, W)
+        ens_np  = ens.cpu().numpy() + last_ctx_np[:, None, None]  # (B,M,T_out,C,H,W)
+        tgt_np  = target.cpu().numpy() + last_ctx_np[:, None]     # (B,T_out,C,H,W)
+        B       = ens_np.shape[0]
 
         for b in range(B):
             crps_per_step, csi_per_step, ss_per_step = [], [], []
 
             for t in range(T_out):
-                ens_t = ens_np[b, :, t]
-                tgt_t = tgt_np[b, t]
+                ens_t = ens_np[b, :, t]   # (M, C, H, W) absolute normalised
+                tgt_t = tgt_np[b, t]      # (C, H, W)    absolute normalised
 
                 crps_per_step.append(crps_energy(ens_t, tgt_t))
                 ss_per_step.append(spread_skill(ens_t, tgt_t))
 
                 if li_idx is not None:
+                    # Threshold on absolute normalised LI — meaningful signal
                     pred_prob = (ens_t[:, li_idx] > li_threshold).mean(axis=0)
                     obs_bin   = (tgt_t[li_idx] > li_threshold).astype(float)
                     csi_per_step.append(
@@ -343,22 +352,63 @@ def evaluate_epoch(
         logger.warning("evaluate_epoch: no batches evaluated — val loader may be empty.")
         return {}
 
-    all_crps = np.array(all_crps)
-    all_ss   = np.array(all_ss)
+    # --- DDP aggregation: reduce per-sample arrays across all ranks ----------
+    # Convert lists to tensors, all_reduce SUM, divide by global sample count.
+    import torch.distributed as dist_mod
+    ddp = dist_mod.is_available() and dist_mod.is_initialized()
+
+    def _reduce_array(lst):
+        """Stack list of per-step arrays → (N, T_out) tensor, all_reduce, return numpy."""
+        t = torch.tensor(lst, device=device)          # (N_local, T_out)
+        if ddp:
+            # Gather counts so we can weight the mean correctly across ranks
+            count = torch.tensor([len(lst)], device=device, dtype=torch.float32)
+            dist_mod.all_reduce(t.sum(0, keepdim=True), op=dist_mod.ReduceOp.SUM)
+            dist_mod.all_reduce(count, op=dist_mod.ReduceOp.SUM)
+            return (t.sum(0) / count).cpu().numpy(), count.item()
+        return t.cpu().numpy(), float(len(lst))
+
+    crps_arr = np.array(all_crps)   # (N_local, T_out)
+    ss_arr   = np.array(all_ss)
+
+    if ddp:
+        # Reduce sum of per-sample arrays and total sample count across ranks
+        crps_sum = torch.tensor(crps_arr.sum(0), device=device)   # (T_out,)
+        ss_sum   = torch.tensor(ss_arr.sum(0),   device=device)
+        n_t      = torch.tensor([len(all_crps)],  device=device, dtype=torch.float32)
+        dist_mod.all_reduce(crps_sum, op=dist_mod.ReduceOp.SUM)
+        dist_mod.all_reduce(ss_sum,   op=dist_mod.ReduceOp.SUM)
+        dist_mod.all_reduce(n_t,      op=dist_mod.ReduceOp.SUM)
+        crps_arr = (crps_sum / n_t).cpu().numpy()   # (T_out,) global mean per step
+        ss_arr   = (ss_sum   / n_t).cpu().numpy()
+        n_global = n_t.item()
+    else:
+        n_global = len(all_crps)
+
+    # Rank 0 returns the final dict; other ranks return {}.
+    # Both ranks MUST have called all_reduce above before reaching this point.
+    if ddp and dist_mod.get_rank() != 0:
+        return {}
 
     metrics = {
-        "crps_mean":    float(all_crps.mean()),
-        "crps_1h":      float(all_crps[:, :6].mean())  if T_out >= 6  else float(all_crps.mean()),
-        "crps_3h":      float(all_crps[:, :18].mean()) if T_out >= 18 else float(all_crps.mean()),
-        "crps_6h":      float(all_crps[:, -1].mean()),
-        "spread_skill": float(all_ss.mean()),
+        "crps_mean":    float(crps_arr.mean()),
+        "crps_1h":      float(crps_arr[:6].mean())  if T_out >= 6  else float(crps_arr.mean()),
+        "crps_3h":      float(crps_arr[:18].mean()) if T_out >= 18 else float(crps_arr.mean()),
+        "crps_6h":      float(crps_arr[-1]),
+        "spread_skill": float(ss_arr.mean()),
     }
     if all_csi:
-        all_csi = np.array(all_csi)
+        csi_arr = np.array(all_csi)
+        if ddp:
+            csi_sum = torch.tensor(csi_arr.sum(0), device=device)
+            n_c     = torch.tensor([len(all_csi)],  device=device, dtype=torch.float32)
+            dist_mod.all_reduce(csi_sum, op=dist_mod.ReduceOp.SUM)
+            dist_mod.all_reduce(n_c,     op=dist_mod.ReduceOp.SUM)
+            csi_arr = (csi_sum / n_c).cpu().numpy()
         metrics.update({
-            "csi_mean": float(all_csi.mean()),
-            "csi_1h":   float(all_csi[:, :6].mean()) if T_out >= 6 else float(all_csi.mean()),
-            "csi_6h":   float(all_csi[:, -1].mean()),
+            "csi_mean": float(csi_arr.mean()),
+            "csi_1h":   float(csi_arr[:6].mean()) if T_out >= 6 else float(csi_arr.mean()),
+            "csi_6h":   float(csi_arr[-1]),
         })
 
     return metrics
@@ -381,34 +431,24 @@ def fast_val_metrics(
     """
     Cheap validation metrics for use every training epoch.
 
-    No ODE solver, no ensemble generation — just one forward pass per batch.
+    DDP-aware: all ranks run inference on their own val_loader shard in
+    parallel, accumulate weighted sums, then all_reduce across ranks so
+    rank 0 can compute the global mean.  Non-rank-0 ranks return {}.
 
     For each batch:
-      1. Sample σ from the EDM log-normal distribution (same as training),
-         one σ per batch item.
-      2. Add noise at that σ to a randomly chosen target lead-time frame.
-      3. Run one denoiser forward pass and measure:
-           - val_loss   : full EDM-weighted loss (comparable to train_loss)
-           - val_mse    : unweighted pixel MSE between denoised output
-                          and clean target (interpretable in normalised units)
-           - val_mae    : mean absolute error
-           - val_li_mse : MSE on the LI channel only (if present)
+      1. Sample σ from the EDM log-normal (same distribution as training).
+      2. Add noise to a randomly chosen target lead-time frame.
+      3. One denoiser forward pass → val_loss / val_mse / val_mae / val_li_mse.
 
-    val_samples: -1 = use the full val loader every epoch (most accurate,
-                      slower for large val sets).
-                 >0 = randomly sample that many batches (faster, still
-                      unbiased in expectation across epochs).
-
-    Using the same σ distribution as training means val_loss is directly
-    comparable to train_loss — the gap is the overfitting signal.
+    val_samples=-1 uses the full (per-rank) shard; >0 randomly samples that
+    many batches so the per-epoch cost is bounded.
     """
-    from model import EDMSchedule as _EDMSchedule
+    import torch.distributed as dist_mod
+    from model import channel_weighted_mse
+
     model.eval()
-
-    li_idx     = channels.index("li") if "li" in channels else None
-    cloud_idxs = [i for i, ch in enumerate(channels) if ch != "li"]
-
-    val_losses, val_mses, val_maes, val_li_mses = [], [], [], []
+    li_idx = channels.index("li") if "li" in channels else None
+    ddp    = dist_mod.is_available() and dist_mod.is_initialized()
 
     total_batches = len(val_loader)
     if val_samples == -1 or val_samples >= total_batches:
@@ -418,69 +458,91 @@ def fast_val_metrics(
         chosen_fast = set(random.sample(range(total_batches), val_samples))
         budget_fast = val_samples
 
+    # Accumulators: sum and count kept as GPU tensors for efficient all_reduce.
+    # Layout: [loss_sum, mse_sum, mae_sum, li_mse_sum, n_batches, n_li_batches]
+    acc = torch.zeros(6, device=device)
+
+    rank        = dist_mod.get_rank() if ddp else 0
+    pbar = tqdm(
+        enumerate(val_loader),
+        total        = budget_fast,
+        desc         = f"  Fast val (rank {rank})",
+        unit         = "batch",
+        dynamic_ncols = True,
+        leave        = False,
+    )
+
     evaluated = 0
-    for batch_idx, batch in enumerate(val_loader):
+    for batch_idx, batch in pbar:
         if chosen_fast is not None and batch_idx not in chosen_fast:
             continue
         if evaluated >= budget_fast:
             break
 
-        context  = batch["context"].to(device)   # (B, T_in, C, H, W)
-        target   = batch["target"].to(device)    # (B, T_out, C, H, W)
-        tgt_mask = batch["tgt_mask"].to(device)  # (B, T_out, C)
+        context  = batch["context"].to(device)
+        target   = batch["target"].to(device)
+        tgt_mask = batch["tgt_mask"].to(device)
 
         B, T_out, C, H, W = target.shape
-
-        # Sample a random lead step per batch item — mirrors training
         lead_idx = torch.randint(0, T_out, (B,), device=device)
-        y        = target[torch.arange(B), lead_idx]      # (B, C, H, W)
-        ch_mask  = tgt_mask[torch.arange(B), lead_idx]    # (B, C)
+        y        = target[torch.arange(B), lead_idx]
+        ch_mask  = tgt_mask[torch.arange(B), lead_idx]
 
-        # Sample σ from the EDM log-normal — same distribution as training
-        sigma = schedule.sample_sigma(B, device)           # (B,)
-
-        # Add noise
+        sigma   = schedule.sample_sigma(B, device)
         x_noisy = y + torch.randn_like(y) * sigma[:, None, None, None]
+        pred    = model(x_noisy, sigma, context, ch_mask, lead_idx)
 
-        # One denoiser forward pass (no CFG dropout at val time)
-        pred = model(x_noisy, sigma, context, ch_mask, lead_idx)  # (B, C, H, W)
-
-        # ----- val_loss: EDM-weighted MSE (comparable to train loss) -----
-        from model import channel_weighted_mse, spectral_loss
+        # val_loss: EDM-weighted (comparable to train_loss)
         lw   = schedule.edm_loss_weight(sigma)[:, None, None, None]
-        loss = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, li_weight=3.0)
-        val_losses.append(loss.item())
+        loss = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(),
+                                    ch_mask, li_weight=3.0)
 
-        # ----- val_mse / val_mae: unweighted, interpretable pixel errors -----
-        with torch.no_grad():
-            err      = (pred - y)                               # (B, C, H, W)
-            # Only score channels that are present (ch_mask=1)
-            mask_hw  = ch_mask[:, :, None, None].float()        # (B, C, 1, 1)
-            mse_per  = (err ** 2 * mask_hw).sum() / (mask_hw.sum() * H * W + 1e-8)
-            mae_per  = (err.abs() * mask_hw).sum() / (mask_hw.sum() * H * W + 1e-8)
-            val_mses.append(mse_per.item())
-            val_maes.append(mae_per.item())
+        # val_mse / val_mae: unweighted pixel errors
+        err     = pred - y
+        mask_hw = ch_mask[:, :, None, None].float()
+        denom   = mask_hw.sum() * H * W + 1e-8
+        mse     = (err ** 2 * mask_hw).sum() / denom
+        mae     = (err.abs() * mask_hw).sum() / denom
 
-            # LI-specific MSE
-            if li_idx is not None:
-                li_err   = err[:, li_idx]                       # (B, H, W)
-                li_mask  = ch_mask[:, li_idx].float()           # (B,)
-                li_mse   = (li_err ** 2).mean(dim=(-2, -1))    # (B,)
-                li_mse_m = (li_mse * li_mask).sum() / (li_mask.sum() + 1e-8)
-                val_li_mses.append(li_mse_m.item())
+        acc[0] += loss
+        acc[1] += mse
+        acc[2] += mae
+        acc[4] += 1.0
+
+        if li_idx is not None:
+            li_err  = err[:, li_idx]
+            li_mask = ch_mask[:, li_idx].float()
+            li_mse  = (li_err ** 2).mean(dim=(-2, -1))
+            li_mse_m = (li_mse * li_mask).sum() / (li_mask.sum() + 1e-8)
+            acc[3] += li_mse_m
+            acc[5] += 1.0
 
         evaluated += 1
+        pbar.set_postfix(
+            loss = f"{(acc[0] / max(acc[4], 1)).item():.4f}",
+            mse  = f"{(acc[1] / max(acc[4], 1)).item():.4f}",
+            refresh = False,
+        )
 
-    def _m(lst): return float(np.mean(lst)) if lst else float("nan")
+    # Aggregate across all ranks
+    if ddp:
+        dist_mod.all_reduce(acc, op=dist_mod.ReduceOp.SUM)
 
+    # Rank 0 builds and returns the global dict; other ranks return {}.
+    # Both ranks MUST reach this point — the all_reduce above is a collective
+    # and requires all ranks to call it before any rank can proceed.
+    if ddp and dist_mod.get_rank() != 0:
+        return {}
+
+    n       = acc[4].item()
+    n_li    = acc[5].item()
     metrics = {
-        "val_loss": _m(val_losses),   # EDM-weighted, comparable to train_loss
-        "val_mse":  _m(val_mses),     # unweighted pixel MSE
-        "val_mae":  _m(val_maes),     # unweighted pixel MAE
+        "val_loss": acc[0].item() / max(n, 1),
+        "val_mse":  acc[1].item() / max(n, 1),
+        "val_mae":  acc[2].item() / max(n, 1),
     }
-    if val_li_mses:
-        metrics["val_li_mse"] = _m(val_li_mses)
-
+    if n_li > 0:
+        metrics["val_li_mse"] = acc[3].item() / n_li
     return metrics
 
 
@@ -810,25 +872,28 @@ def run_test_evaluation(args):
                        dynamic_ncols=True, leave=True)
 
     for batch in batch_bar:
-        context = batch["context"].to(device)
-        target  = batch["target"].to(device)
-        ch_mask = batch["tgt_mask"][:, 0].to(device)
+        context  = batch["context"].to(device)
+        target   = batch["target"].to(device)       # (B, T_out, C, H, W) residuals
+        last_ctx = batch["last_ctx"].to(device)     # (B, C, H, W) last context frame
+        ch_mask  = batch["tgt_mask"][:, 0].to(device)
 
         ens = generate_ensemble(
             model, context, ch_mask, device,
             n_members = args.n_members,
             cfg_scale = args.cfg_scale,
-        )
+        )  # (B, M, T_out, C, H, W) residuals
 
-        ens_np = ens.cpu().numpy()
-        tgt_np = target.cpu().numpy()
-        ctx_np = batch["context"].numpy()
-        B      = ens_np.shape[0]
+        # Reconstruct absolute normalised frames before all metric computation
+        last_ctx_np = last_ctx.cpu().numpy()                            # (B, C, H, W)
+        ens_np  = ens.cpu().numpy() + last_ctx_np[:, None, None]        # (B,M,T_out,C,H,W)
+        tgt_np  = target.cpu().numpy() + last_ctx_np[:, None]           # (B,T_out,C,H,W)
+        ctx_np  = batch["context"].numpy()                              # (B,T_in,C,H,W)
+        B       = ens_np.shape[0]
 
         for b in range(B):
             for t in range(T_out):
-                ens_t    = ens_np[b, :, t]
-                tgt_t    = tgt_np[b, t]
+                ens_t    = ens_np[b, :, t]   # (M, C, H, W) absolute normalised
+                tgt_t    = tgt_np[b, t]      # (C, H, W)    absolute normalised
                 ens_mean = ens_t.mean(axis=0)
 
                 crps_by_step[t].append(crps_energy(ens_t, tgt_t))
@@ -845,6 +910,7 @@ def run_test_evaluation(args):
                                 ssim_by_ch_step[ch][t].append(cm[ch]["ssim"])
 
                 if li_idx is not None:
+                    # Threshold on absolute normalised LI
                     pred_prob = (ens_t[:, li_idx] > args.li_threshold).mean(axis=0)
                     obs_bin   = (tgt_t[li_idx] > args.li_threshold).astype(np.float32)
 
@@ -867,18 +933,17 @@ def run_test_evaluation(args):
 
             if args.plot and seq_counter < args.max_plots:
                 from dataset import denormalize as _denorm
-                ctx_b    = ctx_np[b]
-                last_ctx = ctx_b[-1]
-                ctx_den  = np.zeros_like(ctx_b)
-                ens_den  = np.zeros_like(ens_np[b])
-                tgt_den  = np.zeros_like(tgt_np[b])
+                ctx_b   = ctx_np[b]
+                ctx_den = np.zeros_like(ctx_b)
+                ens_den = np.zeros_like(ens_np[b])
+                tgt_den = np.zeros_like(tgt_np[b])
                 for ci, ch in enumerate(channels):
                     fn = (lambda x, _ch=ch: _denorm(x, stats, _ch)) if ch in stats                          else (lambda x: x)
                     ctx_den[:, ci]    = fn(ctx_b[:, ci])
-                    tgt_abs           = tgt_np[b, :, ci] + last_ctx[ci]
-                    tgt_den[:, ci]    = fn(tgt_abs)
+                    # ens_np and tgt_np are already absolute — just denormalise
+                    tgt_den[:, ci]    = fn(tgt_np[b, :, ci])
                     for m in range(ens_np.shape[1]):
-                        ens_den[m, :, ci] = fn(ens_np[b, m, :, ci] + last_ctx[ci])
+                        ens_den[m, :, ci] = fn(ens_np[b, m, :, ci])
                 png = os.path.join(args.output_dir, "plots", f"eval_{seq_counter:04d}.png")
                 plot_forecast(context_np=ctx_den, ens_np=ens_den,
                               channels=channels, gt_np=tgt_den, save_path=png)

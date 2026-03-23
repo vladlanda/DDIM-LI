@@ -85,6 +85,9 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--cfg_scale",       type=float, default=1.5)
 
     # ---- Validation / logging ----
+    parser.add_argument("--slow_val",    type=_bool, default=True,
+                        help="Enable full probabilistic eval (ODE solver) every "
+                             "val_every epochs. Set false to run only fast_val_metrics.")
     parser.add_argument("--val_every",   type=int, default=5,
                         help="Run full ensemble validation every N epochs.")
     parser.add_argument("--val_samples", type=int, default=-1,
