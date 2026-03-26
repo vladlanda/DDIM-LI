@@ -13,7 +13,10 @@ All metrics are computed per lead time step so you can plot
 skill vs. forecast horizon.
 """
 
+import csv
+import json
 import logging
+import os
 import random
 from typing import Dict, List, Optional
 
@@ -28,6 +31,18 @@ try:
     HAS_SKIMAGE = True
 except ImportError:
     HAS_SKIMAGE = False
+
+# cuML (RAPIDS) — GPU-accelerated metrics.  Falls back to sklearn silently.
+try:
+    import cuml.metrics as _cuml_metrics
+    from cuml.metrics import precision_recall_curve as _pr_curve
+    from cuml.metrics import auc as _auc
+    HAS_CUML = True
+except ImportError:
+    from sklearn.metrics import precision_recall_curve as _pr_curve
+    from sklearn.metrics import auc as _auc
+    from sklearn.metrics import brier_score_loss as _sk_brier
+    HAS_CUML = False
 
 from model import MultiStepDenoiser, EDMSchedule, edm_sampler
 from dataset import denormalize
@@ -104,17 +119,25 @@ def crps_energy(
     obs:      np.ndarray,   # (...) same shape sans M
 ) -> float:
     """
-    CRPS via energy score decomposition:
-      CRPS = E[|X - y|] - 0.5 * E[|X - X'|]
-    Computed pixelwise, returned as scalar mean.
+    CRPS via energy score decomposition (Gneiting & Raftery 2007):
+      CRPS = E[|X - y|] - (1/2) * E[|X - X'|]
+
+    E[|X - X'|] is the mean over ALL M² pairs (diagonal = 0) — i.e.
+    divide by M², not by M(M-1)/2.  Dividing by unique pairs only is a
+    biased estimator that under-penalises spread.
+
+    The Python loop over unique pairs is kept intentionally: for small M
+    (typically 10) numpy broadcast allocates an (M,M,C,H,W) tensor whose
+    memory cost and allocation overhead exceeds the loop cost at this scale.
     """
-    M = ensemble.shape[0]
-    term1 = np.abs(ensemble - obs[None]).mean(axis=0)
+    M     = ensemble.shape[0]
+    term1 = np.abs(ensemble - obs[None]).mean(axis=0)   # (C,H,W)
+    # Sum unique pairs, then scale to the M² mean: sum_unique * 2 / M²
     diffs = 0.0
     for i in range(M):
         for j in range(i + 1, M):
             diffs += np.abs(ensemble[i] - ensemble[j])
-    term2 = diffs / (M * (M - 1) / 2 + 1e-8)
+    term2 = diffs * 2.0 / (M * M)                       # ÷ M²  (unbiased)
     return float((term1 - 0.5 * term2).mean())
 
 
@@ -143,8 +166,9 @@ def cloud_metrics(
         pred = ens_mean[ci].astype(np.float32)
         gt   = obs[ci].astype(np.float32)
 
-        rmse_norm = float(np.sqrt(np.mean((pred - gt) ** 2)))
-        mae_norm  = float(np.mean(np.abs(pred - gt)))
+        from sklearn.metrics import mean_squared_error, mean_absolute_error
+        rmse_norm = float(np.sqrt(mean_squared_error(gt.ravel(), pred.ravel())))
+        mae_norm  = float(mean_absolute_error(gt.ravel(), pred.ravel()))
 
         is_cbrt = ch in stats and stats[ch].get("transform") == "cbrt"
         if not is_cbrt and ch in stats:
@@ -215,8 +239,23 @@ def brier_score(
     pred_prob: np.ndarray,   # (H, W) ensemble probability
     obs_bin:   np.ndarray,   # (H, W) binary
 ) -> float:
-    """Mean squared error between predicted probability and binary observation."""
-    return float(np.mean((pred_prob - obs_bin.astype(np.float32)) ** 2))
+    """
+    Mean squared error between predicted probability and binary observation.
+    Uses cuML if available, sklearn otherwise, plain numpy as final fallback.
+    """
+    y_true = obs_bin.ravel().astype(np.float32)
+    y_prob = pred_prob.ravel().astype(np.float32)
+    if HAS_CUML:
+        try:
+            import cupy as cp
+            # cuML brier_score_loss expects 1-D arrays
+            return float(_cuml_metrics.brier_score_loss(
+                cp.asarray(y_true), cp.asarray(y_prob)
+            ))
+        except Exception:
+            pass
+    # sklearn brier_score_loss = mean((p - y)^2), identical formula
+    return float(_sk_brier(y_true, y_prob))
 
 
 # ===================================================================
@@ -661,11 +700,11 @@ def plot_forecast(
         squeeze     = False,
         gridspec_kw = {"wspace": 0.02, "hspace": 0.12},
     )
-    fig.patch.set_facecolor("#1a1a2e")
+    fig.patch.set_facecolor("white")
     for ax_row in axes:
         for ax in ax_row:
             ax.axis("off")
-            ax.set_facecolor("#1a1a2e")
+            ax.set_facecolor("white")
 
     # Pre-compute last context frame composites (shared across all columns)
     ctx_last = context_np[-1]              # (C, H, W)
@@ -686,8 +725,8 @@ def plot_forecast(
         axes[0, base + 1].imshow(ctx_li, cmap="hot", vmin=0, vmax=1)
         axes[0, base + 2].set_visible(False)
         if col_idx == 0:
-            axes[0, base    ].set_title("IR/CH0/CH1", fontsize=font_title, color="white", pad=2)
-            axes[0, base + 1].set_title("LI",         fontsize=font_title, color="white", pad=2)
+            axes[0, base    ].set_title("IR/CH0/CH1", fontsize=font_title, color="black", pad=2)
+            axes[0, base + 1].set_title("LI",         fontsize=font_title, color="black", pad=2)
 
         # ── Row 1: Prediction ──
         pred_rgb = _make_rgb(ens_mean, channels)
@@ -701,7 +740,7 @@ def plot_forecast(
         axes[1, base    ].imshow(pred_rgb)
         axes[1, base + 1].imshow(pred_li,  cmap="hot",    vmin=0, vmax=1)
         axes[1, base + 2].imshow(spread_li, cmap="plasma", vmin=0, vmax=1)
-        axes[1, base    ].set_title(f"+{lead_min}m", fontsize=font_title, color="white", pad=2)
+        axes[1, base    ].set_title(f"+{lead_min}m", fontsize=font_title, color="black", pad=2)
 
         # ── Row 2: Ground truth ──
         if has_gt:
@@ -714,7 +753,7 @@ def plot_forecast(
     row_labels = ["Context", "Prediction", "Ground Truth"] if has_gt \
                  else ["Context", "Prediction"]
     for r, label in enumerate(row_labels):
-        axes[r, 0].set_ylabel(label, fontsize=8, color="white",
+        axes[r, 0].set_ylabel(label, fontsize=8, color="black",
                               rotation=90, labelpad=4, va="center")
         axes[r, 0].yaxis.set_label_position("left")
         axes[r, 0].axis("on")
@@ -726,18 +765,18 @@ def plot_forecast(
     # Sub-column header legend (once, top-right)
     fig.text(0.99, 0.99,
              "Pred cols: [IR+CH0+CH1 | LI | LI-spread]",
-             ha="right", va="top", fontsize=7, color="#aaaaaa",
+             ha="right", va="top", fontsize=7, color="#555555",
              transform=fig.transFigure)
 
     plt.suptitle(
         f"METSAT Lightning Nowcast — {n_steps} steps × 10min  "
         f"({'with GT' if has_gt else 'no GT'})",
-        fontsize=10, color="white", y=1.005,
+        fontsize=10, color="black", y=1.005,
     )
 
     if save_path:
         plt.savefig(save_path, dpi=100, bbox_inches="tight",
-                    facecolor=fig.get_facecolor())
+                    facecolor="white")
         logger.info(f"  Saved plot: {save_path}  ({n_steps} steps, {n_rows} rows)")
     else:
         plt.show()
@@ -747,6 +786,372 @@ def plot_forecast(
 # ===================================================================
 # Full test-set evaluation  (called from __main__)
 # ===================================================================
+
+
+# ===================================================================
+# Plot regeneration from saved plot_data.npz (--plot_only)
+# ===================================================================
+
+def _regenerate_plots(npz_path: str, args) -> None:
+    """
+    Reload all arrays saved during a previous run_test_evaluation call
+    and regenerate every skill-curve / PR / calibration figure without
+    re-running model inference.  Called automatically when --plot_only
+    is passed.
+    """
+    import json as _json_inner
+    data = np.load(npz_path, allow_pickle=True)
+
+    per_step     = _json_inner.loads(str(data["per_step_json"]))
+    lead_times   = data["lead_times"].tolist()
+    channels     = data["channels"].tolist()
+    cloud_chs    = data["cloud_chs"].tolist()
+    fss_scales   = data["fss_scales"].tolist()
+    T_out        = int(data["T_out"])
+    dt_min       = int(data["dt_min"])
+
+    def _mean(lst): return float(np.mean(lst)) if len(lst) > 0 else float("nan")
+
+    # Reconstruct fss_by_scale_step from saved per-step means
+    fss_by_scale_step = {}
+    for s in fss_scales:
+        key = f"fss_s{s}"
+        arr = data[key].tolist() if key in data else [float("nan")] * T_out
+        fss_by_scale_step[s] = [[v] for v in arr]
+
+    # Reconstruct PR / calibration arrays
+    pr_steps_arr = data["pr_steps"].tolist()
+    pr_probs  = {t: [] for t in pr_steps_arr}
+    pr_labels = {t: [] for t in pr_steps_arr}
+    cal_probs  = {t: [] for t in pr_steps_arr}
+    cal_labels = {t: [] for t in pr_steps_arr}
+    for t in pr_steps_arr:
+        if f"pr_prob_{t}" in data:
+            pr_probs[t]   = [data[f"pr_prob_{t}"]]
+            pr_labels[t]  = [data[f"pr_label_{t}"]]
+            cal_probs[t]  = [data[f"cal_prob_{t}"]]
+            cal_labels[t] = [data[f"cal_label_{t}"]]
+
+    li_idx   = channels.index("li") if "li" in channels else None
+    pr_steps = set(pr_steps_arr)
+    ch_unit  = {ch: "K" for ch in cloud_chs}
+
+    ssim_by_ch_step = {
+        ch: [([per_step[t][f"ssim_{ch}"]] if f"ssim_{ch}" in per_step[t] else [])
+             for t in range(T_out)]
+        for ch in cloud_chs
+    }
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    logger.info(f"--plot_only: regenerating plots -> {args.output_dir}")
+
+    import matplotlib
+    # Use interactive backend when displaying, headless Agg when only saving
+    if getattr(args, "plot_only", False):
+        try:
+            matplotlib.use("TkAgg")
+        except Exception:
+            try:
+                matplotlib.use("Qt5Agg")
+            except Exception:
+                matplotlib.use("Agg")
+                logger.warning("No interactive backend available — saving only")
+    else:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import get_cmap
+
+    # ── Journal-style white theme ─────────────────────────────────
+    plt.rcParams.update({
+        "figure.facecolor":  "white",
+        "axes.facecolor":    "white",
+        "axes.edgecolor":    "black",
+        "axes.labelcolor":   "black",
+        "xtick.color":       "black",
+        "ytick.color":       "black",
+        "text.color":        "black",
+        "grid.color":        "#cccccc",
+        "grid.linestyle":    "--",
+        "grid.linewidth":    0.5,
+        "legend.framealpha": 0.9,
+        "legend.edgecolor":  "#cccccc",
+        "font.size":         9,
+    })
+
+    def _styled_ax(ax):
+        """Apply journal-style white formatting to an axis."""
+        ax.set_facecolor("white")
+        ax.tick_params(colors="black")
+        ax.xaxis.label.set_color("black")
+        ax.yaxis.label.set_color("black")
+        ax.title.set_color("black")
+        for s in ax.spines.values():
+            s.set_edgecolor("black")
+            s.set_linewidth(0.8)
+        ax.grid(True, color="#cccccc", linestyle="--", linewidth=0.5, zorder=0)
+
+    lt = lead_times
+
+    # ── Figure 1: Cloud skill curves — 2×N grid (no 1×N strips) ────
+    ch_palette = [
+        "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e",
+        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+    ]
+    ch_colors = {ch: ch_palette[i % len(ch_palette)]
+                 for i, ch in enumerate(cloud_chs)}
+
+    has_ssim   = any(ssim_by_ch_step[ch][0] for ch in cloud_chs)
+    n_subplots = 4 + (1 if has_ssim else 0)
+
+    # Choose a grid that avoids 1×N: prefer 2 rows
+    import math
+    ncols1 = math.ceil(n_subplots / 2)
+    nrows1 = math.ceil(n_subplots / ncols1)
+    fig1, axes1_2d = plt.subplots(nrows1, ncols1,
+                                   figsize=(4.5 * ncols1, 3.8 * nrows1))
+    fig1.patch.set_facecolor("white")
+    axes1 = axes1_2d.flatten() if hasattr(axes1_2d, "flatten") else [axes1_2d]
+    # Hide any unused axes
+    for ax in axes1[n_subplots:]:
+        ax.set_visible(False)
+
+    def _ch_unit_label(ch):
+        return ch_unit.get(ch, "norm")
+
+    unit_lbl = "/".join(sorted(set(ch_unit.values())))
+
+    ax = axes1[0]
+    for ch in cloud_chs:
+        vals = [r.get(f"rmse_{ch}", float("nan")) for r in per_step]
+        ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.5, label=ch)
+    ax.set_title("RMSE per Channel")
+    ax.set_xlabel("Lead time (min)")
+    ax.set_ylabel(f"RMSE ({unit_lbl})")
+    ax.legend(fontsize=8)
+    _styled_ax(ax)
+
+    ax = axes1[1]
+    for ch in cloud_chs:
+        vals = [r.get(f"mae_{ch}", float("nan")) for r in per_step]
+        ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.5, label=ch)
+    ax.set_title("MAE per Channel")
+    ax.set_xlabel("Lead time (min)")
+    ax.set_ylabel(f"MAE ({unit_lbl})")
+    ax.legend(fontsize=8)
+    _styled_ax(ax)
+
+    ax_idx = 2
+    if has_ssim:
+        ax = axes1[ax_idx]
+        for ch in cloud_chs:
+            vals = [r.get(f"ssim_{ch}", float("nan")) for r in per_step]
+            ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.5, label=ch)
+        ax.set_ylim(0, 1)
+        ax.axhline(1.0, color="#888888", linestyle=":", linewidth=0.8)
+        ax.set_title("SSIM per Channel")
+        ax.set_xlabel("Lead time (min)")
+        ax.set_ylabel("SSIM")
+        ax.legend(fontsize=8)
+        _styled_ax(ax)
+        ax_idx += 1
+
+    ax = axes1[ax_idx]
+    ax.plot(lt, [r["crps"] for r in per_step], color="#1f77b4", linewidth=1.5)
+    ax.set_title("CRPS (All Channels)")
+    ax.set_xlabel("Lead time (min)")
+    ax.set_ylabel("CRPS (normalised)")
+    _styled_ax(ax)
+    ax_idx += 1
+
+    ax = axes1[ax_idx]
+    ax.plot(lt, [r["spread_skill"] for r in per_step], color="#2ca02c", linewidth=1.5)
+    ax.axhline(1.0, color="#d62728", linestyle="--", linewidth=1.0, label="Ideal = 1.0")
+    ax.legend(fontsize=8)
+    ax.set_title("Spread-Skill Ratio")
+    ax.set_xlabel("Lead time (min)")
+    ax.set_ylabel("Spread / Skill")
+    _styled_ax(ax)
+
+    fig1.suptitle("Cloud Prediction Skill", fontsize=12, fontweight="bold", y=1.01)
+    fig1.tight_layout()
+    cloud_path = os.path.join(args.output_dir, "skill_curves_cloud.png")
+    fig1.savefig(cloud_path, dpi=150, bbox_inches="tight", facecolor="white")
+    if getattr(args, 'plot_only', False): plt.show()
+    plt.close(fig1)
+    logger.info(f"Cloud skill     -> {cloud_path}")
+
+    if li_idx is not None:
+        import matplotlib.cm as mcm
+
+        lt_cmap   = mcm.get_cmap("turbo")
+        lt_colors = [lt_cmap(i / max(T_out - 1, 1)) for i in range(T_out)]
+
+        def _lt_legend(ax, labeled_steps, ncol=4, loc="best", extra_handles=None):
+            handles = list(extra_handles or [])
+            for t in labeled_steps:
+                handles.append(
+                    plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
+                               label=f"+{(t+1)*dt_min}m")
+                )
+            ax.legend(handles=handles, fontsize=7.5, ncol=ncol, loc=loc,
+                      framealpha=0.9, handlelength=1.4,
+                      columnspacing=0.8, handletextpad=0.4)
+
+        # ── Figure 2: CSI / POD / FAR / Brier — 2×2 grid ────────
+        fig2, axes2 = plt.subplots(2, 2, figsize=(10, 8))
+        fig2.patch.set_facecolor("white")
+        li_cfg = [
+            ([r["csi"]   for r in per_step], "#1f77b4", "CSI vs Lead Time",    "CSI"),
+            ([r["pod"]   for r in per_step], "#2ca02c", "POD vs Lead Time",    "POD"),
+            ([r["far"]   for r in per_step], "#d62728", "FAR vs Lead Time",    "FAR"),
+            ([r["brier"] for r in per_step], "#9467bd", "Brier Score vs Lead Time", "Brier Score"),
+        ]
+        for ax, (vals, color, title, ylabel) in zip(axes2.flatten(), li_cfg):
+            ax.plot(lt, vals, color=color, linewidth=1.5)
+            if ylabel in ("CSI", "POD"):
+                ax.set_ylim(0, 1)
+            ax.set_title(title)
+            ax.set_xlabel("Lead time (min)")
+            ax.set_ylabel(ylabel)
+            _styled_ax(ax)
+        fig2.suptitle("Lightning Detection Skill", fontsize=12, fontweight="bold")
+        fig2.tight_layout()
+        li_path = os.path.join(args.output_dir, "skill_curves_lightning.png")
+        fig2.savefig(li_path, dpi=150, bbox_inches="tight", facecolor="white")
+        if getattr(args, 'plot_only', False): plt.show()
+        plt.close(fig2)
+        logger.info(f"Lightning skill -> {li_path}")
+
+        # ── Figure 3: FSS vs scale ────────────────────────────────
+        fig3, ax3 = plt.subplots(figsize=(7, 5))
+        fig3.patch.set_facecolor("white")
+        scale_km = [s * args.pixel_size_km for s in fss_scales]
+        for t in pr_steps:
+            fss_vals = [_mean(fss_by_scale_step[s][t]) for s in fss_scales]
+            ax3.plot(scale_km, fss_vals, color=lt_colors[t],
+                     linewidth=1.2, marker="o", markersize=3, alpha=0.9)
+        skill_line = plt.Line2D([0], [0], color="#d62728", linestyle="--",
+                                linewidth=1.5, label="FSS = 0.5 (useful skill)")
+        ax3.axhline(0.5, color="#d62728", linestyle="--", linewidth=1.5)
+        ax3.set_xlabel("Neighbourhood Scale (km)")
+        ax3.set_ylabel("FSS")
+        ax3.set_title(f"FSS vs Spatial Scale — all {T_out} lead times",
+                      fontweight="bold")
+        _styled_ax(ax3)
+        _lt_legend(ax3, pr_steps, ncol=4, loc="lower right",
+                   extra_handles=[skill_line])
+        fig3.tight_layout()
+        fss_path = os.path.join(args.output_dir, "fss_vs_scale.png")
+        fig3.savefig(fss_path, dpi=150, bbox_inches="tight", facecolor="white")
+        if getattr(args, 'plot_only', False): plt.show()
+        plt.close(fig3)
+        logger.info(f"FSS plot        -> {fss_path}")
+
+        # ── Figure 4 + 5: PR and Calibration — 1×2 side by side ──
+        # (two square panels = 2×1 is fine for a matched pair)
+        fig45, (ax4, ax5) = plt.subplots(1, 2, figsize=(12, 5.5))
+        fig45.patch.set_facecolor("white")
+
+        # PR curves — uses cuML (GPU) if available, sklearn otherwise.
+        # Both are imported at module level as _pr_curve / _auc.
+        auc_by_step = {}
+        for t in pr_steps:
+            if not pr_probs[t]:
+                continue
+            all_prob = np.concatenate(pr_probs[t]).astype(np.float32)
+            all_lbl  = np.concatenate(pr_labels[t]).astype(np.int32)
+            if HAS_CUML:
+                try:
+                    import cupy as cp
+                    prec, rec, _ = _pr_curve(
+                        cp.asarray(all_lbl), cp.asarray(all_prob)
+                    )
+                    prec = cp.asnumpy(prec)
+                    rec  = cp.asnumpy(rec)
+                except Exception:
+                    prec, rec, _ = _pr_curve(all_lbl, all_prob)
+            else:
+                prec, rec, _ = _pr_curve(all_lbl, all_prob)
+            auc_val        = float(_auc(rec, prec))
+            auc_by_step[t] = auc_val
+            ax4.plot(rec, prec, color=lt_colors[t], linewidth=1.2, alpha=0.9)
+        ax4.set_xlabel("Recall (POD)")
+        ax4.set_ylabel("Precision (1 − FAR)")
+        ax4.set_title("Precision-Recall Curves", fontweight="bold")
+        ax4.set_xlim(0, 1); ax4.set_ylim(0, 1)
+        _styled_ax(ax4)
+        handles_pr = [
+            plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
+                       label=f"+{(t+1)*dt_min}m  AUC={auc_by_step[t]:.2f}")
+            for t in pr_steps if t in auc_by_step
+        ]
+        ax4.legend(handles=handles_pr, fontsize=7.5, ncol=4,
+                   loc="upper right", framealpha=0.9,
+                   handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
+
+        # Reliability / calibration diagram
+        n_bins      = 10
+        bin_edges   = np.linspace(0, 1, n_bins + 1)
+        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+        diag_line   = plt.Line2D([0], [0], color="black", linestyle="--",
+                                 linewidth=1.2, label="Perfect calibration")
+        ax5.plot([0, 1], [0, 1], color="black", linestyle="--",
+                 linewidth=1.2, zorder=5)
+        for t in pr_steps:
+            if not cal_probs[t]:
+                continue
+            all_prob = np.concatenate(cal_probs[t])
+            all_lbl  = np.concatenate(cal_labels[t])
+            bin_idx  = np.digitize(all_prob, bin_edges[1:-1])
+            obs_freq = np.full(n_bins, np.nan)
+            for b_i in range(n_bins):
+                mask = bin_idx == b_i
+                if mask.sum() > 10:
+                    obs_freq[b_i] = all_lbl[mask].mean()
+            valid = ~np.isnan(obs_freq)
+            ax5.plot(bin_centers[valid], obs_freq[valid],
+                     color=lt_colors[t], linewidth=1.2,
+                     marker="o", markersize=3, alpha=0.9)
+        ax5.set_xlabel("Mean Predicted Probability")
+        ax5.set_ylabel("Observed Frequency")
+        ax5.set_title("Reliability Diagram", fontweight="bold")
+        ax5.set_xlim(0, 1); ax5.set_ylim(0, 1)
+        _styled_ax(ax5)
+        _lt_legend(ax5, pr_steps, ncol=4, loc="upper left",
+                   extra_handles=[diag_line])
+
+        fig45.suptitle(f"Lightning Probabilistic Skill — all {T_out} lead times",
+                       fontsize=12, fontweight="bold")
+        fig45.tight_layout()
+        pr_path  = os.path.join(args.output_dir, "precision_recall.png")
+        cal_path = os.path.join(args.output_dir, "calibration.png")
+        fig45.savefig(pr_path,  dpi=150, bbox_inches="tight", facecolor="white")
+        if getattr(args, 'plot_only', False): plt.show()
+        # Also save calibration panel alone
+        fig_cal, ax_cal = plt.subplots(figsize=(6, 5.5))
+        fig_cal.patch.set_facecolor("white")
+        ax_cal.plot([0, 1], [0, 1], color="black", linestyle="--", linewidth=1.2)
+        for line in ax5.lines:
+            ax_cal.plot(line.get_xdata(), line.get_ydata(),
+                        color=line.get_color(), linewidth=line.get_linewidth(),
+                        marker=line.get_marker() if line.get_marker() != "None" else "",
+                        markersize=line.get_markersize(), alpha=line.get_alpha() or 1.0)
+        ax_cal.set_xlabel("Mean Predicted Probability")
+        ax_cal.set_ylabel("Observed Frequency")
+        ax_cal.set_title("Reliability Diagram", fontweight="bold")
+        ax_cal.set_xlim(0, 1); ax_cal.set_ylim(0, 1)
+        _styled_ax(ax_cal)
+        _lt_legend(ax_cal, pr_steps, ncol=4, loc="upper left",
+                   extra_handles=[diag_line])
+        fig_cal.tight_layout()
+        fig_cal.savefig(cal_path, dpi=150, bbox_inches="tight", facecolor="white")
+        if getattr(args, 'plot_only', False): plt.show()
+        plt.close(fig45)
+        plt.close(fig_cal)
+        logger.info(f"PR curve        -> {pr_path}")
+        logger.info(f"Calibration     -> {cal_path}")
+
+
 
 def run_test_evaluation(args):
     """
@@ -779,6 +1184,18 @@ def run_test_evaluation(args):
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     root_log.addHandler(h)
     root_log.setLevel(logging.INFO)
+
+    # ---- plot_only: load saved arrays and jump straight to plots ----
+    if args.plot_only:
+        npz_path = os.path.join(args.output_dir, "plot_data.npz")
+        if not os.path.exists(npz_path):
+            raise FileNotFoundError(
+                f"--plot_only requires {npz_path}\n"
+                "Run evaluation once first (without --plot_only) to generate it."
+            )
+        logger.info(f"--plot_only: loading plot data from {npz_path}")
+        _regenerate_plots(npz_path, args)
+        return {}
 
     # ---- Device ----
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -1033,264 +1450,40 @@ def run_test_evaluation(args):
         writer.writerows(per_step)
     logger.info(f"Per-step   -> {csv_path}")
 
+    # ---- Save plot data (all arrays needed to regenerate plots) ----
+    # Saved as .npz so plots can be regenerated instantly with --plot_only
+    # without re-running the full evaluation.
+    npz_path = os.path.join(args.output_dir, "plot_data.npz")
+    npz_payload = {
+        "per_step_json": np.array(json.dumps(per_step)),   # serialised as scalar str
+        "lead_times":    np.array(lead_times),
+        "channels":      np.array(channels),
+        "cloud_chs":     np.array(cloud_chs),
+        "fss_scales":    np.array(fss_scales),
+        "T_out":         np.array(T_out),
+        "dt_min":        np.array(dt_min),
+        "pixel_size_km": np.array(args.pixel_size_km),
+    }
+    # FSS per scale per step
+    for s in fss_scales:
+        npz_payload[f"fss_s{s}"] = np.array(
+            [_mean(fss_by_scale_step[s][t]) for t in range(T_out)]
+        )
+    # PR / calibration: concatenated and subsampled (already bounded)
+    pr_steps_arr = list(pr_steps)
+    npz_payload["pr_steps"] = np.array(pr_steps_arr)
+    for t in pr_steps_arr:
+        if pr_probs[t]:
+            npz_payload[f"pr_prob_{t}"]   = np.concatenate(pr_probs[t])
+            npz_payload[f"pr_label_{t}"]  = np.concatenate(pr_labels[t])
+            npz_payload[f"cal_prob_{t}"]  = np.concatenate(cal_probs[t])
+            npz_payload[f"cal_label_{t}"] = np.concatenate(cal_labels[t])
+    np.savez_compressed(npz_path, **npz_payload)
+    logger.info(f"Plot data  -> {npz_path}  (use --plot_only to regenerate plots)")
+
     # ---- All plots ----
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from matplotlib.cm import get_cmap
-
-        BG, TC = "#1a1a2e", "white"
-
-        def _styled_ax(ax):
-            ax.set_facecolor(BG)
-            ax.tick_params(colors=TC)
-            ax.xaxis.label.set_color(TC)
-            ax.yaxis.label.set_color(TC)
-            ax.title.set_color(TC)
-            for s in ax.spines.values():
-                s.set_edgecolor("#555")
-
-        lt = lead_times
-
-        # ── Figure 1: Cloud skill curves — one line per channel ─────
-        # Palette for cloud channels
-        ch_palette   = ["#4fc3f7", "#f48fb1", "#aed581", "#ffb74d",
-                        "#ce93d8", "#80cbc4", "#ef9a9a", "#fff176"]
-        ch_colors    = {ch: ch_palette[i % len(ch_palette)]
-                        for i, ch in enumerate(cloud_chs)}
-
-        # Determine subplot count: RMSE, MAE, [SSIM if available], CRPS, Spread-Skill
-        has_ssim  = any(ssim_by_ch_step[ch][0] for ch in cloud_chs)
-        n_subplots = 4 + (1 if has_ssim else 0)
-        fig1, axes1 = plt.subplots(1, n_subplots, figsize=(5*n_subplots, 4.5))
-        fig1.patch.set_facecolor(BG)
-
-        def _ch_unit_label(ch):
-            return ch_unit.get(ch, "norm")
-
-        # --- RMSE per channel ---
-        ax = axes1[0]
-        for ch in cloud_chs:
-            vals = [r.get(f"rmse_{ch}", float("nan")) for r in per_step]
-            ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.8, label=ch)
-        unit_lbl = "/".join(sorted(set(ch_unit.values())))
-        ax.set_title("RMSE per channel"); ax.set_xlabel("Lead time (min)")
-        ax.set_ylabel(f"RMSE ({unit_lbl})")
-        ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
-        _styled_ax(ax)
-
-        # --- MAE per channel ---
-        ax = axes1[1]
-        for ch in cloud_chs:
-            vals = [r.get(f"mae_{ch}", float("nan")) for r in per_step]
-            ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.8, label=ch)
-        ax.set_title("MAE per channel"); ax.set_xlabel("Lead time (min)")
-        ax.set_ylabel(f"MAE ({unit_lbl})")
-        ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
-        _styled_ax(ax)
-
-        # --- SSIM per channel (optional) ---
-        ax_idx = 2
-        if has_ssim:
-            ax = axes1[ax_idx]
-            for ch in cloud_chs:
-                vals = [r.get(f"ssim_{ch}", float("nan")) for r in per_step]
-                ax.plot(lt, vals, color=ch_colors[ch], linewidth=1.8, label=ch)
-            ax.set_ylim(0, 1)
-            ax.axhline(1.0, color="#555", linestyle=":", linewidth=0.8)
-            ax.set_title("SSIM per channel"); ax.set_xlabel("Lead time (min)")
-            ax.set_ylabel("SSIM (higher=better)")
-            ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
-            _styled_ax(ax)
-            ax_idx += 1
-
-        # --- CRPS (all channels combined) ---
-        ax = axes1[ax_idx]
-        ax.plot(lt, [r["crps"] for r in per_step], color="#4fc3f7", linewidth=1.8)
-        ax.set_title("CRPS (all channels)"); ax.set_xlabel("Lead time (min)")
-        ax.set_ylabel("CRPS (normalised)")
-        _styled_ax(ax)
-        ax_idx += 1
-
-        # --- Spread-Skill ratio ---
-        ax = axes1[ax_idx]
-        ax.plot(lt, [r["spread_skill"] for r in per_step], color="#aed581", linewidth=1.8)
-        ax.axhline(1.0, color="#ef5350", linestyle="--", linewidth=1, label="ideal=1.0")
-        ax.legend(facecolor="#2a2a4e", labelcolor=TC, fontsize=8)
-        ax.set_title("Spread-Skill Ratio"); ax.set_xlabel("Lead time (min)")
-        ax.set_ylabel("Spread / Skill")
-        _styled_ax(ax)
-
-        plt.suptitle("Cloud Prediction Skill Curves", color=TC, fontsize=13)
-        plt.tight_layout()
-        cloud_path = os.path.join(args.output_dir, "skill_curves_cloud.png")
-        plt.savefig(cloud_path, dpi=130, bbox_inches="tight", facecolor=fig1.get_facecolor())
-        plt.close(fig1)
-        logger.info(f"Cloud skill     -> {cloud_path}")
-
-        if li_idx is not None:
-            import matplotlib.cm as mcm
-            import matplotlib.colors as mcolors
-
-            # One colour per lead-time step from a smooth sequential palette.
-            # With up to 36 steps the legend uses multiple columns and small
-            # markers — every step gets its own colour + label.
-            lt_cmap   = mcm.get_cmap("turbo")   # wide perceptual range, readable on dark bg
-            lt_colors = [lt_cmap(i / max(T_out - 1, 1)) for i in range(T_out)]
-
-            def _lt_legend(ax, labeled_steps, ncol=4, loc="best", extra_handles=None):
-                """Build a compact multi-column legend for the given step indices."""
-                handles = extra_handles or []
-                for t in labeled_steps:
-                    handles.append(
-                        plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
-                                   label=f"+{(t+1)*dt_min}m")
-                    )
-                ax.legend(handles=handles,
-                          facecolor="#2a2a4e", labelcolor=TC,
-                          fontsize=7.5, ncol=ncol,
-                          loc=loc, framealpha=0.9,
-                          handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
-
-            # ── Figure 2: CSI / POD / FAR / Brier vs lead time ───────
-            fig2, axes2 = plt.subplots(1, 4, figsize=(20, 4))
-            fig2.patch.set_facecolor(BG)
-            li_cfg = [
-                ([r["csi"]   for r in per_step], "#ffb74d", "CSI vs Lead Time",   "CSI"),
-                ([r["pod"]   for r in per_step], "#81c784", "POD vs Lead Time",   "POD"),
-                ([r["far"]   for r in per_step], "#e57373", "FAR vs Lead Time",   "FAR"),
-                ([r["brier"] for r in per_step], "#b39ddb", "Brier vs Lead Time", "Brier Score"),
-            ]
-            for ax, (vals, color, title, ylabel) in zip(axes2, li_cfg):
-                ax.plot(lt, vals, color=color, linewidth=1.8)
-                if ylabel in ("CSI", "POD"):
-                    ax.set_ylim(0, 1)
-                ax.set_title(title); ax.set_xlabel("Lead time (min)"); ax.set_ylabel(ylabel)
-                _styled_ax(ax)
-            plt.suptitle("Lightning Detection Skill vs Lead Time", color=TC, fontsize=13)
-            plt.tight_layout()
-            li_path = os.path.join(args.output_dir, "skill_curves_lightning.png")
-            plt.savefig(li_path, dpi=130, bbox_inches="tight", facecolor=fig2.get_facecolor())
-            plt.close(fig2)
-            logger.info(f"Lightning skill -> {li_path}")
-
-            # ── Figure 3: FSS vs neighbourhood scale — all T_out lead times ──
-            fig3, ax3 = plt.subplots(figsize=(10, 6))
-            fig3.patch.set_facecolor(BG)
-            scale_km = [s * args.pixel_size_km for s in fss_scales]
-            for t in pr_steps:
-                fss_vals = [_mean(fss_by_scale_step[s][t]) for s in fss_scales]
-                ax3.plot(scale_km, fss_vals, color=lt_colors[t],
-                         linewidth=1.2, marker="o", markersize=3, alpha=0.9)
-            skill_line = plt.Line2D([0], [0], color="#ef5350", linestyle="--",
-                                    linewidth=1.5, label="FSS = 0.5 (useful skill)")
-            ax3.axhline(0.5, color="#ef5350", linestyle="--", linewidth=1.5)
-            ax3.set_xlabel("Neighbourhood scale (km)")
-            ax3.set_ylabel("FSS")
-            ax3.set_title("FSS vs Spatial Scale", color=TC)
-            _styled_ax(ax3)
-            _lt_legend(ax3, pr_steps, ncol=4, loc="lower right",
-                       extra_handles=[skill_line])
-            plt.suptitle(f"Lightning FSS — all {T_out} lead times", color=TC, fontsize=13)
-            plt.tight_layout()
-            fss_path = os.path.join(args.output_dir, "fss_vs_scale.png")
-            plt.savefig(fss_path, dpi=130, bbox_inches="tight", facecolor=fig3.get_facecolor())
-            plt.close(fig3)
-            logger.info(f"FSS plot        -> {fss_path}")
-
-            # ── Figure 4: Precision-Recall — all T_out lead times ────
-            fig4, ax4 = plt.subplots(figsize=(10, 7))
-            fig4.patch.set_facecolor(BG)
-            thresholds  = np.linspace(0, 1, 51)
-            auc_by_step = {}
-            # Store curves for labelled steps so we don't recompute them
-            curves      = {}
-            for t in pr_steps:
-                if not pr_probs[t]:
-                    continue
-                all_prob = np.concatenate(pr_probs[t])
-                all_lbl  = np.concatenate(pr_labels[t])
-                precisions, recalls = [], []
-                for thr in thresholds:
-                    pred_b = (all_prob >= thr).astype(float)
-                    tp = (pred_b * all_lbl).sum()
-                    fp = (pred_b * (1 - all_lbl)).sum()
-                    fn = ((1 - pred_b) * all_lbl).sum()
-                    precisions.append(tp / (tp + fp + 1e-8))
-                    recalls.append(tp / (tp + fn + 1e-8))
-                auc = float(np.trapz(precisions[::-1], recalls[::-1]))
-                auc_by_step[t] = auc
-                curves[t] = (recalls, precisions)
-                ax4.plot(recalls, precisions, color=lt_colors[t],
-                         linewidth=1.2, alpha=0.9)
-            ax4.set_xlabel("Recall (POD)")
-            ax4.set_ylabel("Precision (1 − FAR)")
-            ax4.set_title("Precision-Recall Curves", color=TC)
-            ax4.set_xlim(0, 1); ax4.set_ylim(0, 1)
-            _styled_ax(ax4)
-            # Legend: include AUC in the label for every step
-            handles_pr = [
-                plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
-                           label=f"+{(t+1)*dt_min}m  AUC={auc_by_step[t]:.2f}")
-                for t in pr_steps if t in auc_by_step
-            ]
-            ax4.legend(handles=handles_pr,
-                       facecolor="#2a2a4e", labelcolor=TC,
-                       fontsize=7.5, ncol=4, loc="upper right",
-                       framealpha=0.9, handlelength=1.4,
-                       columnspacing=0.8, handletextpad=0.4)
-            plt.suptitle(f"Lightning PR Curves — all {T_out} lead times", color=TC, fontsize=13)
-            plt.tight_layout()
-            pr_path = os.path.join(args.output_dir, "precision_recall.png")
-            plt.savefig(pr_path, dpi=130, bbox_inches="tight", facecolor=fig4.get_facecolor())
-            plt.close(fig4)
-            logger.info(f"PR curve        -> {pr_path}")
-
-            # ── Figure 5: Reliability diagram — all T_out lead times ─
-            n_bins      = 10
-            bin_edges   = np.linspace(0, 1, n_bins + 1)
-            bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-
-            fig5, ax5 = plt.subplots(figsize=(10, 7))
-            fig5.patch.set_facecolor(BG)
-            diag_line = plt.Line2D([0], [0], color="white", linestyle="--",
-                                   linewidth=1.5, alpha=0.6, label="Perfect calibration")
-            ax5.plot([0, 1], [0, 1], color="white", linestyle="--",
-                     linewidth=1.5, alpha=0.6, zorder=5)
-            for t in pr_steps:
-                if not cal_probs[t]:
-                    continue
-                all_prob = np.concatenate(cal_probs[t])
-                all_lbl  = np.concatenate(cal_labels[t])
-                bin_idx  = np.digitize(all_prob, bin_edges[1:-1])
-                obs_freq = np.full(n_bins, np.nan)
-                for b in range(n_bins):
-                    mask = bin_idx == b
-                    if mask.sum() > 10:
-                        obs_freq[b] = all_lbl[mask].mean()
-                valid = ~np.isnan(obs_freq)
-                ax5.plot(bin_centers[valid], obs_freq[valid],
-                         color=lt_colors[t], linewidth=1.2,
-                         marker="o", markersize=3, alpha=0.9)
-            ax5.set_xlabel("Mean predicted probability")
-            ax5.set_ylabel("Observed frequency")
-            ax5.set_title("Reliability Diagram", color=TC)
-            ax5.set_xlim(0, 1); ax5.set_ylim(0, 1)
-            _styled_ax(ax5)
-            _lt_legend(ax5, pr_steps, ncol=4, loc="upper left",
-                       extra_handles=[diag_line])
-            plt.suptitle(f"Lightning Calibration — all {T_out} lead times", color=TC, fontsize=13)
-            plt.tight_layout()
-            cal_path = os.path.join(args.output_dir, "calibration.png")
-            plt.savefig(cal_path, dpi=130, bbox_inches="tight", facecolor=fig5.get_facecolor())
-            plt.close(fig5)
-            logger.info(f"Calibration     -> {cal_path}")
-
-    except Exception as e:
-        import traceback
-        logger.warning(f"Could not save plots: {e}")
-        logger.warning(traceback.format_exc())
+    # ---- All plots ----
+    _regenerate_plots(npz_path, args)
 
     # ---- Print summary ----
     logger.info("\n" + "=" * 52)
@@ -1341,6 +1534,9 @@ if __name__ == "__main__":
     p.add_argument("--gpu",           type=int,   default=0)
     p.add_argument("--plot",          action="store_true",
                    help="Save full forecast PNGs for each test sequence")
+    p.add_argument("--plot_only",     action="store_true",
+                   help="Skip inference — reload plot_data.npz from --output_dir "
+                        "and regenerate all figures instantly.")
     p.add_argument("--max_plots",     type=int,   default=20)
     p.add_argument("--fss_scales",    nargs="+", type=int,
                    default=[1, 2, 4, 8, 16, 32],

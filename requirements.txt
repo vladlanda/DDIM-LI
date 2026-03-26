@@ -21,6 +21,7 @@ pyyaml==6.0.1
 
 # Evaluation
 scikit-image==0.23.2
+scikit-learn>=1.3
 scipy==1.13.1
 
 # Logging (optional but recommended)
