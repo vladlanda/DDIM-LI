@@ -114,6 +114,27 @@ def generate_ensemble(
 # CRPS  (energy form, sample-based)
 # ===================================================================
 
+def _li_to_physical(arr: np.ndarray, stats: Dict, ch: str = "li") -> np.ndarray:
+    """
+    Reverse the LI normalisation pipeline to get physical LI values in [0, 1].
+
+    Pipeline applied at load time:
+        raw [0,1] → cbrt(raw) → (cbrt - mean) / std   (normalised space)
+
+    Inverse:
+        normalised → * std + mean → cube → physical [0,1]
+
+    Thresholding should always happen in physical space so that
+    li_event_threshold has a meaningful, data-independent value.
+    """
+    if ch not in stats:
+        return arr
+    x = arr * stats[ch]["std"] + stats[ch]["mean"]   # undo z-score
+    if stats[ch].get("transform") == "cbrt":
+        x = np.power(x, 3)                            # undo cbrt
+    return x
+
+
 def crps_energy(
     ensemble: np.ndarray,   # (M, ...) member dimension first
     obs:      np.ndarray,   # (...) same shape sans M
@@ -193,25 +214,64 @@ def cloud_metrics(
 # Lightning-specific metrics (binary events)
 # ===================================================================
 
+def lightning_skill_curve(
+    pred_prob: np.ndarray,   # (H*W,) or (H, W) ensemble probability in [0,1]
+    obs_bin:   np.ndarray,   # (H*W,) or (H, W) binary 0/1 ground truth
+) -> Dict[str, np.ndarray]:
+    """
+    Compute POD, FAR, CSI at ALL unique ensemble probability thresholds
+    using sklearn.metrics.precision_recall_curve.
+
+    NWP definitions:
+        POD = recall    = TP / (TP + FN)
+        FAR = 1 - precision = FP / (TP + FP)   [NWP false-alarm ratio]
+        CSI = TP / (TP + FP + FN)
+            = 1 / (1/precision + 1/recall - 1)
+
+    Note: sklearn roc_curve gives FPR=FP/(FP+TN), NOT NWP-FAR.
+    precision_recall_curve is the correct source for all three metrics.
+
+    Also returns Brier score (threshold-free).
+    """
+    from sklearn.metrics import precision_recall_curve, brier_score_loss as _bsl
+
+    y_true = obs_bin.ravel().astype(np.int32)
+    y_prob = pred_prob.ravel().astype(np.float32)
+
+    brier = float(_bsl(y_true, y_prob))
+
+    if y_true.sum() == 0:
+        # No positive observations — CSI/POD/FAR undefined
+        return {"thresholds": np.array([0.5]),
+                "pod": np.array([0.0]), "far": np.array([0.0]),
+                "csi": np.array([0.0]), "brier": brier}
+
+    prec, rec, thr = precision_recall_curve(y_true, y_prob)
+    prec, rec = prec[:-1], rec[:-1]   # drop appended (1, 0) sentinel
+
+    far = 1.0 - prec
+    with np.errstate(invalid="ignore", divide="ignore"):
+        csi = np.where((prec > 0) & (rec > 0),
+                       1.0 / (1.0 / prec + 1.0 / rec - 1.0), 0.0)
+
+    return {"thresholds": thr, "pod": rec, "far": far, "csi": csi, "brier": brier}
+
+
 def lightning_contingency(
     pred_prob: np.ndarray,  # (H, W) probability from ensemble fraction
     obs:       np.ndarray,  # (H, W) binary 0/1
     threshold: float = 0.5,
 ) -> Dict[str, float]:
+    """Single-threshold wrapper — used in evaluate_epoch for fast val."""
     pred_bin = (pred_prob >= threshold).astype(float)
     obs_bin  = (obs > 0).astype(float)
-
     TP = (pred_bin * obs_bin).sum()
     FP = (pred_bin * (1 - obs_bin)).sum()
     FN = ((1 - pred_bin) * obs_bin).sum()
-    TN = ((1 - pred_bin) * (1 - obs_bin)).sum()
-
     csi  = TP / (TP + FP + FN + 1e-8)
     pod  = TP / (TP + FN + 1e-8)
     far  = FP / (TP + FP + 1e-8)
-    bias = (TP + FP) / (TP + FN + 1e-8)
-    return {"csi": float(csi), "pod": float(pod),
-            "far": float(far), "bias": float(bias)}
+    return {"csi": float(csi), "pod": float(pod), "far": float(far)}
 
 
 def fss(
@@ -285,7 +345,7 @@ def evaluate_epoch(
     n_members:    int   = 10,
     val_samples:  int   = -1,      # batches to evaluate; -1 = full val set
     cfg_scale:    float = 1.5,
-    li_threshold: float = 0.1,
+    li_event_threshold: float = 0.1,
     dt_min:       int   = 10,
 ) -> Dict[str, float]:
     """
@@ -365,9 +425,15 @@ def evaluate_epoch(
                 ss_per_step.append(spread_skill(ens_t, tgt_t))
 
                 if li_idx is not None:
-                    # Threshold on absolute normalised LI — meaningful signal
-                    pred_prob = (ens_t[:, li_idx] > li_threshold).mean(axis=0)
-                    obs_bin   = (tgt_t[li_idx] > li_threshold).astype(float)
+                    # Convert to physical LI [0,1] before thresholding.
+                    # Thresholding in normalised/cbrt space is meaningless —
+                    # the same raw LI value maps to different normalised values
+                    # depending on the dataset statistics.
+                    obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
+                    ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
+                                          for m in range(ens_t.shape[0])])
+                    pred_prob = (ens_phys > li_event_threshold).mean(axis=0)
+                    obs_bin   = (obs_phys > li_event_threshold).astype(float)
                     csi_per_step.append(
                         lightning_contingency(pred_prob, obs_bin)["csi"]
                     )
@@ -465,7 +531,7 @@ def fast_val_metrics(
     device:       "torch.device",
     channels:     List[str],
     val_samples:  int   = -1,      # batches to use; -1 = full val set
-    li_threshold: float = 0.1,
+    li_event_threshold: float = 0.1,
 ) -> Dict[str, float]:
     """
     Cheap validation metrics for use every training epoch.
@@ -575,6 +641,139 @@ def fast_val_metrics(
 
     n       = acc[4].item()
     n_li    = acc[5].item()
+    metrics = {
+        "val_loss": acc[0].item() / max(n, 1),
+        "val_mse":  acc[1].item() / max(n, 1),
+        "val_mae":  acc[2].item() / max(n, 1),
+    }
+    if n_li > 0:
+        metrics["val_li_mse"] = acc[3].item() / n_li
+    return metrics
+
+
+
+@torch.no_grad()
+def fast_val_metrics_ar(
+    model:        "ARDenoiser",
+    val_loader:   "DataLoader",
+    schedule:     "EDMSchedule",
+    device:       "torch.device",
+    channels:     List[str],
+    val_samples:  int   = -1,
+    li_event_threshold: float = 0.1,
+) -> Dict[str, float]:
+    """
+    Cheap validation metrics for the AR model — identical to fast_val_metrics
+    but calls ARDenoiser.forward() which takes (x_noisy, sigma, context, ch_mask)
+    without a lead_idx argument.
+
+    For each batch we pick a random target step and use the corresponding
+    rolling ground-truth context window (teacher forcing), exactly mirroring
+    ar_training_loss.
+    """
+    import torch.distributed as dist_mod
+    from model import channel_weighted_mse
+
+    model.eval()
+    li_idx = channels.index("li") if "li" in channels else None
+    ddp    = dist_mod.is_available() and dist_mod.is_initialized()
+
+    total_batches = len(val_loader)
+    if val_samples == -1 or val_samples >= total_batches:
+        chosen_fast = None
+        budget_fast = total_batches
+    else:
+        chosen_fast = set(random.sample(range(total_batches), val_samples))
+        budget_fast = val_samples
+
+    acc = torch.zeros(6, device=device)
+
+    rank = dist_mod.get_rank() if ddp else 0
+    pbar = tqdm(
+        enumerate(val_loader),
+        total        = budget_fast,
+        desc         = f"  Fast val AR (rank {rank})",
+        unit         = "batch",
+        dynamic_ncols = True,
+        leave        = False,
+    )
+
+    evaluated = 0
+    for batch_idx, batch in pbar:
+        if chosen_fast is not None and batch_idx not in chosen_fast:
+            continue
+        if evaluated >= budget_fast:
+            break
+
+        context  = batch["context"].to(device)    # (B, T_in, C, H, W)
+        target   = batch["target"].to(device)     # (B, T_out, C, H, W) residuals
+        tgt_mask = batch["tgt_mask"].to(device)   # (B, T_out, C)
+        last_ctx = batch["last_ctx"].to(device)   # (B, C, H, W)
+
+        B, T_out, C, H, W = target.shape
+        _, T_in, _, _, _  = context.shape
+
+        # Random target step — mirrors ar_training_loss
+        step_idx   = torch.randint(0, T_out, (B,), device=device)
+        target_abs = target + last_ctx[:, None]   # (B, T_out, C, H, W) absolute
+
+        # Rolling context window for this step (teacher forcing)
+        all_frames   = torch.cat([context, target_abs], dim=1)  # (B, T_in+T_out, C, H, W)
+        ctx_for_step = torch.stack(
+            [all_frames[b, step_idx[b]:step_idx[b] + T_in] for b in range(B)], dim=0
+        )
+
+        # Target residual: abs[step] - abs[step-1]  (or - last_ctx for step 0)
+        prev_abs = torch.stack([
+            last_ctx[b] if step_idx[b] == 0
+            else target_abs[b, step_idx[b].item() - 1]
+            for b in range(B)
+        ])
+        y       = target_abs[torch.arange(B), step_idx] - prev_abs
+        ch_mask = tgt_mask[torch.arange(B), step_idx]
+
+        sigma   = schedule.sample_sigma(B, device)
+        x_noisy = y + torch.randn_like(y) * sigma[:, None, None, None]
+
+        # ARDenoiser.forward takes (x_noisy, sigma, context, ch_mask) — no lead_idx
+        pred = model(x_noisy, sigma, ctx_for_step, ch_mask)
+
+        lw   = schedule.edm_loss_weight(sigma)[:, None, None, None]
+        loss = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(),
+                                    ch_mask, li_weight=3.0)
+
+        err     = pred - y
+        mask_hw = ch_mask[:, :, None, None].float()
+        denom   = mask_hw.sum() * H * W + 1e-8
+        mse     = (err ** 2 * mask_hw).sum() / denom
+        mae     = (err.abs() * mask_hw).sum() / denom
+
+        acc[0] += loss
+        acc[1] += mse
+        acc[2] += mae
+        acc[4] += 1.0
+
+        if li_idx is not None:
+            li_err   = err[:, li_idx]
+            li_mask  = ch_mask[:, li_idx].float()
+            li_mse_m = (li_err ** 2).mean(dim=(-2, -1))
+            acc[3]  += (li_mse_m * li_mask).sum() / (li_mask.sum() + 1e-8)
+            acc[5]  += 1.0
+
+        evaluated += 1
+        pbar.set_postfix(
+            loss = f"{(acc[0] / max(acc[4], 1)).item():.4f}",
+            mse  = f"{(acc[1] / max(acc[4], 1)).item():.4f}",
+            refresh = False,
+        )
+
+    if ddp:
+        dist_mod.all_reduce(acc, op=dist_mod.ReduceOp.SUM)
+
+    if ddp and dist_mod.get_rank() != 0:
+        return {}
+
+    n, n_li = acc[4].item(), acc[5].item()
     metrics = {
         "val_loss": acc[0].item() / max(n, 1),
         "val_mse":  acc[1].item() / max(n, 1),
@@ -812,13 +1011,6 @@ def _regenerate_plots(npz_path: str, args) -> None:
 
     def _mean(lst): return float(np.mean(lst)) if len(lst) > 0 else float("nan")
 
-    # Reconstruct fss_by_scale_step from saved per-step means
-    fss_by_scale_step = {}
-    for s in fss_scales:
-        key = f"fss_s{s}"
-        arr = data[key].tolist() if key in data else [float("nan")] * T_out
-        fss_by_scale_step[s] = [[v] for v in arr]
-
     # Reconstruct PR / calibration arrays
     pr_steps_arr = data["pr_steps"].tolist()
     pr_probs  = {t: [] for t in pr_steps_arr}
@@ -835,6 +1027,15 @@ def _regenerate_plots(npz_path: str, args) -> None:
     li_idx   = channels.index("li") if "li" in channels else None
     pr_steps = set(pr_steps_arr)
     ch_unit  = {ch: "K" for ch in cloud_chs}
+    fss_prob_thresholds = data["fss_prob_thresholds"].tolist() if "fss_prob_thresholds" in data                       else [0.1, 0.2, 0.3, 0.4, 0.5]
+    # Reconstruct fss_by_thr_scale_step from npz
+    fss_by_thr_scale_step = {}
+    for thr in fss_prob_thresholds:
+        fss_by_thr_scale_step[thr] = {}
+        for s in fss_scales:
+            key = f"fss_thr{thr}_s{s}"
+            arr = data[key].tolist() if key in data else [float("nan")] * T_out
+            fss_by_thr_scale_step[thr][s] = [[v] for v in arr]
 
     ssim_by_ch_step = {
         ch: [([per_step[t][f"ssim_{ch}"]] if f"ssim_{ch}" in per_step[t] else [])
@@ -998,22 +1199,42 @@ def _regenerate_plots(npz_path: str, args) -> None:
                       columnspacing=0.8, handletextpad=0.4)
 
         # ── Figure 2: CSI / POD / FAR / Brier — 2×2 grid ────────
-        fig2, axes2 = plt.subplots(2, 2, figsize=(10, 8))
+        # One line per probability threshold for CSI/POD/FAR/FSS.
+        # Brier score is threshold-free (uses raw ensemble probability).
+        thr_palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                       "#8c564b", "#e377c2", "#7f7f7f"]
+        thr_colors  = {thr: thr_palette[i % len(thr_palette)]
+                       for i, thr in enumerate(fss_prob_thresholds)}
+
+        fig2, axes2 = plt.subplots(2, 2, figsize=(12, 9))
         fig2.patch.set_facecolor("white")
-        li_cfg = [
-            ([r["csi"]   for r in per_step], "#1f77b4", "CSI vs Lead Time",    "CSI"),
-            ([r["pod"]   for r in per_step], "#2ca02c", "POD vs Lead Time",    "POD"),
-            ([r["far"]   for r in per_step], "#d62728", "FAR vs Lead Time",    "FAR"),
-            ([r["brier"] for r in per_step], "#9467bd", "Brier Score vs Lead Time", "Brier Score"),
-        ]
-        for ax, (vals, color, title, ylabel) in zip(axes2.flatten(), li_cfg):
-            ax.plot(lt, vals, color=color, linewidth=1.5)
-            if ylabel in ("CSI", "POD"):
-                ax.set_ylim(0, 1)
-            ax.set_title(title)
-            ax.set_xlabel("Lead time (min)")
-            ax.set_ylabel(ylabel)
+        ax_csi, ax_pod, ax_far, ax_brier = axes2.flatten()
+
+        for thr in fss_prob_thresholds:
+            c = thr_colors[thr]
+            lbl = f"p>{thr}"
+            ax_csi.plot(lt, [r[f"csi_{thr}"] for r in per_step],
+                        color=c, linewidth=1.5, label=lbl)
+            ax_pod.plot(lt, [r[f"pod_{thr}"] for r in per_step],
+                        color=c, linewidth=1.5, label=lbl)
+            ax_far.plot(lt, [r[f"far_{thr}"] for r in per_step],
+                        color=c, linewidth=1.5, label=lbl)
+
+        ax_brier.plot(lt, [r["brier"] for r in per_step],
+                      color="#9467bd", linewidth=1.5)
+
+        for ax, title, ylabel, ylim in [
+            (ax_csi,   "CSI vs Lead Time",        "CSI",        (0, 1)),
+            (ax_pod,   "POD vs Lead Time",         "POD",        (0, 1)),
+            (ax_far,   "FAR vs Lead Time",         "FAR",        (0, 1)),
+            (ax_brier, "Brier Score vs Lead Time", "Brier Score", None),
+        ]:
+            ax.set_title(title); ax.set_xlabel("Lead time (min)"); ax.set_ylabel(ylabel)
+            if ylim: ax.set_ylim(*ylim)
             _styled_ax(ax)
+        for ax in [ax_csi, ax_pod, ax_far]:
+            ax.legend(fontsize=8, framealpha=0.9)
+
         fig2.suptitle("Lightning Detection Skill", fontsize=12, fontweight="bold")
         fig2.tight_layout()
         li_path = os.path.join(args.output_dir, "skill_curves_lightning.png")
@@ -1022,24 +1243,59 @@ def _regenerate_plots(npz_path: str, args) -> None:
         plt.close(fig2)
         logger.info(f"Lightning skill -> {li_path}")
 
-        # ── Figure 3: FSS vs scale ────────────────────────────────
-        fig3, ax3 = plt.subplots(figsize=(7, 5))
-        fig3.patch.set_facecolor("white")
+        # ── Figure 3: FSS vs scale ────────────────────────────────────
+        # Layout: one subplot per probability threshold (one column per threshold,
+        # two rows: top = all lead times as coloured lines, bottom = mean over
+        # all lead times so threshold comparison is immediately readable).
+        import math as _math
+        thr_palette3 = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+        thr_colors3  = {thr: thr_palette3[i % len(thr_palette3)]
+                        for i, thr in enumerate(fss_prob_thresholds)}
+        n_thr    = len(fss_prob_thresholds)
         scale_km = [s * args.pixel_size_km for s in fss_scales]
-        for t in pr_steps:
-            fss_vals = [_mean(fss_by_scale_step[s][t]) for s in fss_scales]
-            ax3.plot(scale_km, fss_vals, color=lt_colors[t],
-                     linewidth=1.2, marker="o", markersize=3, alpha=0.9)
-        skill_line = plt.Line2D([0], [0], color="#d62728", linestyle="--",
-                                linewidth=1.5, label="FSS = 0.5 (useful skill)")
-        ax3.axhline(0.5, color="#d62728", linestyle="--", linewidth=1.5)
-        ax3.set_xlabel("Neighbourhood Scale (km)")
-        ax3.set_ylabel("FSS")
-        ax3.set_title(f"FSS vs Spatial Scale — all {T_out} lead times",
-                      fontweight="bold")
-        _styled_ax(ax3)
-        _lt_legend(ax3, pr_steps, ncol=4, loc="lower right",
-                   extra_handles=[skill_line])
+
+        # Two-row layout: top row = per-lead-time curves, bottom row = lead-time mean
+        fig3, axes3 = plt.subplots(2, n_thr, figsize=(5.5 * n_thr, 9),
+                                   squeeze=False)
+        fig3.patch.set_facecolor("white")
+
+        for col, thr in enumerate(fss_prob_thresholds):
+            ax_top = axes3[0, col]
+            ax_bot = axes3[1, col]
+
+            # Top: one line per lead time
+            for t in pr_steps:
+                fss_vals = [_mean(fss_by_thr_scale_step[thr][s][t]) for s in fss_scales]
+                ax_top.plot(scale_km, fss_vals, color=lt_colors[t],
+                            linewidth=1.0, marker="o", markersize=2, alpha=0.8)
+            ax_top.axhline(0.5, color="#d62728", linestyle="--", linewidth=1.5)
+            ax_top.set_title(f"FSS  (p > {thr})", fontweight="bold")
+            ax_top.set_xlabel("Scale (km)"); ax_top.set_ylabel("FSS")
+            ax_top.set_ylim(-0.05, 1.05)
+            _styled_ax(ax_top)
+            skill_line = plt.Line2D([0], [0], color="#d62728", linestyle="--",
+                                    linewidth=1.5, label="FSS=0.5")
+            _lt_legend(ax_top, list(pr_steps)[:T_out], ncol=3, loc="lower right",
+                       extra_handles=[skill_line])
+
+            # Bottom: mean over all lead times — one line only
+            fss_mean = [_mean([_mean(fss_by_thr_scale_step[thr][s][t])
+                               for t in range(T_out)])
+                        for s in fss_scales]
+            ax_bot.plot(scale_km, fss_mean, color=thr_colors3[thr],
+                        linewidth=2.0, marker="o", markersize=5,
+                        label=f"Mean (p>{thr})")
+            ax_bot.axhline(0.5, color="#d62728", linestyle="--", linewidth=1.5,
+                           label="FSS=0.5")
+            ax_bot.set_title(f"FSS mean over lead times  (p > {thr})",
+                             fontweight="bold")
+            ax_bot.set_xlabel("Scale (km)"); ax_bot.set_ylabel("FSS")
+            ax_bot.set_ylim(-0.05, 1.05)
+            ax_bot.legend(fontsize=9)
+            _styled_ax(ax_bot)
+
+        fig3.suptitle(f"Lightning FSS vs Spatial Scale — {T_out} lead times",
+                      fontsize=12, fontweight="bold")
         fig3.tight_layout()
         fss_path = os.path.join(args.output_dir, "fss_vs_scale.png")
         fig3.savefig(fss_path, dpi=150, bbox_inches="tight", facecolor="white")
@@ -1089,29 +1345,28 @@ def _regenerate_plots(npz_path: str, args) -> None:
                    loc="upper right", framealpha=0.9,
                    handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
 
-        # Reliability / calibration diagram
-        n_bins      = 10
-        bin_edges   = np.linspace(0, 1, n_bins + 1)
-        bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-        diag_line   = plt.Line2D([0], [0], color="black", linestyle="--",
-                                 linewidth=1.2, label="Perfect calibration")
+        # Reliability / calibration diagram — sklearn.calibration_curve
+        # replaces the manual bin loop: handles empty bins gracefully and
+        # uses 'uniform' binning strategy consistent with WMO standards.
+        from sklearn.calibration import calibration_curve as _cal_curve
+        diag_line = plt.Line2D([0], [0], color="black", linestyle="--",
+                               linewidth=1.2, label="Perfect calibration")
         ax5.plot([0, 1], [0, 1], color="black", linestyle="--",
                  linewidth=1.2, zorder=5)
         for t in pr_steps:
             if not cal_probs[t]:
                 continue
-            all_prob = np.concatenate(cal_probs[t])
-            all_lbl  = np.concatenate(cal_labels[t])
-            bin_idx  = np.digitize(all_prob, bin_edges[1:-1])
-            obs_freq = np.full(n_bins, np.nan)
-            for b_i in range(n_bins):
-                mask = bin_idx == b_i
-                if mask.sum() > 10:
-                    obs_freq[b_i] = all_lbl[mask].mean()
-            valid = ~np.isnan(obs_freq)
-            ax5.plot(bin_centers[valid], obs_freq[valid],
-                     color=lt_colors[t], linewidth=1.2,
-                     marker="o", markersize=3, alpha=0.9)
+            all_prob = np.concatenate(cal_probs[t]).astype(np.float32)
+            all_lbl  = np.concatenate(cal_labels[t]).astype(np.int32)
+            try:
+                frac_pos, mean_pred = _cal_curve(
+                    all_lbl, all_prob, n_bins=10, strategy="uniform"
+                )
+                ax5.plot(mean_pred, frac_pos,
+                         color=lt_colors[t], linewidth=1.2,
+                         marker="o", markersize=3, alpha=0.9)
+            except ValueError:
+                pass   # skip steps with no positive observations
         ax5.set_xlabel("Mean Predicted Probability")
         ax5.set_ylabel("Observed Frequency")
         ax5.set_title("Reliability Diagram", fontweight="bold")
@@ -1265,12 +1520,18 @@ def run_test_evaluation(args):
     mae_by_ch_step  = {ch: [[] for _ in range(T_out)] for ch in cloud_chs}
     ssim_by_ch_step = {ch: [[] for _ in range(T_out)] for ch in cloud_chs}
 
-    # Lightning
-    csi_by_step   = [[] for _ in range(T_out)]
-    pod_by_step   = [[] for _ in range(T_out)]
-    far_by_step   = [[] for _ in range(T_out)]
-    brier_by_step = [[] for _ in range(T_out)]
-    fss_by_scale_step = {s: [[] for _ in range(T_out)] for s in fss_scales}
+    # Lightning — lightning_skill_curve returns arrays over all thresholds.
+    # We store the full curve per step and aggregate at the end.
+    # GT is always binarised at > 0 in physical space.
+    # FSS still needs a single probability threshold — use fss_prob_thresholds from args.
+    fss_prob_thresholds = args.fss_prob_thresholds   # for FSS only
+
+    # Per-step lists of skill-curve dicts  {thresholds, pod, far, csi, brier}
+    skill_by_step = [[] for _ in range(T_out)]
+    fss_by_thr_scale_step = {
+        thr: {s: [[] for _ in range(T_out)] for s in fss_scales}
+        for thr in fss_prob_thresholds
+    }
 
     # All lead-time steps — pixel subsampling keeps memory bounded
     pr_steps  = list(range(T_out))
@@ -1327,17 +1588,27 @@ def run_test_evaluation(args):
                                 ssim_by_ch_step[ch][t].append(cm[ch]["ssim"])
 
                 if li_idx is not None:
-                    # Threshold on absolute normalised LI
-                    pred_prob = (ens_t[:, li_idx] > args.li_threshold).mean(axis=0)
-                    obs_bin   = (tgt_t[li_idx] > args.li_threshold).astype(np.float32)
+                    # Convert to physical space; GT threshold is always > 0
+                    # (cbrt preserves zero, so > 0 unambiguously means lightning)
+                    obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
+                    ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
+                                          for m in range(ens_t.shape[0])])
+                    obs_bin   = (obs_phys > 0).astype(np.float32)
+                    # Ensemble probability: fraction of members with any lightning
+                    pred_prob = (ens_phys > 0).mean(axis=0).astype(np.float32)
 
-                    ct = lightning_contingency(pred_prob, obs_bin)
-                    csi_by_step[t].append(ct["csi"])
-                    pod_by_step[t].append(ct["pod"])
-                    far_by_step[t].append(ct["far"])
-                    brier_by_step[t].append(brier_score(pred_prob, obs_bin))
-                    for s in fss_scales:
-                        fss_by_scale_step[s][t].append(fss(pred_prob, obs_bin, scale=s))
+                    # Full skill curve at all unique thresholds via sklearn
+                    skill_by_step[t].append(
+                        lightning_skill_curve(pred_prob, obs_bin)
+                    )
+
+                    # FSS at each requested probability threshold (spatial metric,
+                    # no sklearn equivalent — keep scipy uniform_filter)
+                    for thr in fss_prob_thresholds:
+                        for s in fss_scales:
+                            fss_by_thr_scale_step[thr][s][t].append(
+                                fss(pred_prob, obs_bin, scale=s)
+                            )
 
                     if t in pr_steps:
                         flat_prob = pred_prob.ravel()
@@ -1368,7 +1639,15 @@ def run_test_evaluation(args):
             seq_counter += 1
 
         live_crps = float(np.mean([np.mean(v) for v in crps_by_step if v]))
-        live_csi  = float(np.mean([np.mean(v) for v in csi_by_step  if v]))                     if li_idx is not None else float("nan")
+        if li_idx is not None and skill_by_step[0]:
+            # Show CSI at threshold=0.5 as a live indicator
+            live_csi = float(np.mean([
+                np.interp(0.5, sc["thresholds"][::-1], sc["csi"][::-1])
+                for step_list in skill_by_step for sc in step_list
+                if len(sc["thresholds"]) > 0
+            ]))
+        else:
+            live_csi = float("nan")
         batch_bar.set_postfix(crps=f"{live_crps:.4f}", csi=f"{live_csi:.3f}", refresh=False)
 
     # ---- Aggregate per-lead-time ----
@@ -1393,19 +1672,34 @@ def run_test_evaluation(args):
             if ssim_by_ch_step[ch][t]:
                 row[f"ssim_{ch}"] = _mean(ssim_by_ch_step[ch][t])
         if li_idx is not None:
-            row.update({
-                "csi":   _mean(csi_by_step[t]),
-                "pod":   _mean(pod_by_step[t]),
-                "far":   _mean(far_by_step[t]),
-                "brier": _mean(brier_by_step[t]),
-                "fss":   _mean(fss_by_scale_step[fss_scales[len(fss_scales)//2]][t]),
-            })
+            # Aggregate skill curves: for each step, collect all curves and
+            # interpolate onto a common threshold grid [0,1] then take mean
+            if skill_by_step[t]:
+                brier_vals = [sc["brier"] for sc in skill_by_step[t]]
+                row["brier"] = float(np.mean(brier_vals))
+                # Store CSI/POD/FAR at representative thresholds for the CSV
+                for thr in fss_prob_thresholds:
+                    csi_at = [float(np.interp(thr, sc["thresholds"][::-1], sc["csi"][::-1]))
+                              for sc in skill_by_step[t]]
+                    pod_at = [float(np.interp(thr, sc["thresholds"][::-1], sc["pod"][::-1]))
+                              for sc in skill_by_step[t]]
+                    far_at = [float(np.interp(thr, sc["thresholds"][::-1], sc["far"][::-1]))
+                              for sc in skill_by_step[t]]
+                    row[f"csi_{thr}"] = float(np.mean(csi_at))
+                    row[f"pod_{thr}"] = float(np.mean(pod_at))
+                    row[f"far_{thr}"] = float(np.mean(far_at))
+                mid_s = fss_scales[len(fss_scales) // 2]
+                for thr in fss_prob_thresholds:
+                    row[f"fss_{thr}"] = _mean(fss_by_thr_scale_step[thr][mid_s][t])
         per_step.append(row)
 
-    fss_summary = {
-        f"fss_scale{s}": _mean([_mean(fss_by_scale_step[s][t]) for t in range(T_out)])
-        for s in fss_scales
-    } if li_idx is not None else {}
+    fss_summary = {}
+    if li_idx is not None:
+        for thr in fss_prob_thresholds:
+            for s in fss_scales:
+                fss_summary[f"fss_thr{thr}_scale{s}"] = _mean(
+                    [_mean(fss_by_thr_scale_step[thr][s][t]) for t in range(T_out)]
+                )
 
     # Scalar summary (mean over time for each channel)
     summary = {
@@ -1426,15 +1720,14 @@ def run_test_evaluation(args):
         if not all(np.isnan(ssim_vals)):
             summary[f"ssim_{ch}_mean"] = _mean(ssim_vals)
     if li_idx is not None:
-        summary.update({
-            "csi_mean":   _mean([r["csi"]   for r in per_step]),
-            "csi_1h":     _mean([r["csi"]   for r in per_step[:6]]),
-            "csi_6h":     per_step[-1]["csi"],
-            "pod_mean":   _mean([r["pod"]   for r in per_step]),
-            "far_mean":   _mean([r["far"]   for r in per_step]),
-            "brier_mean": _mean([r["brier"] for r in per_step]),
-            **fss_summary,
-        })
+        li_summary = {"brier_mean": _mean([r["brier"] for r in per_step])}
+        for thr in fss_prob_thresholds:
+            li_summary[f"csi_mean_thr{thr}"] = _mean([r[f"csi_{thr}"] for r in per_step])
+            li_summary[f"csi_1h_thr{thr}"]   = _mean([r[f"csi_{thr}"] for r in per_step[:6]])
+            li_summary[f"csi_6h_thr{thr}"]   = per_step[-1][f"csi_{thr}"]
+            li_summary[f"pod_mean_thr{thr}"]  = _mean([r[f"pod_{thr}"] for r in per_step])
+            li_summary[f"far_mean_thr{thr}"]  = _mean([r[f"far_{thr}"] for r in per_step])
+        summary.update({**li_summary, **fss_summary})
 
     # ---- Save JSON ----
     json_path = os.path.join(args.output_dir, "metrics_summary.json")
@@ -1464,11 +1757,14 @@ def run_test_evaluation(args):
         "dt_min":        np.array(dt_min),
         "pixel_size_km": np.array(args.pixel_size_km),
     }
-    # FSS per scale per step
-    for s in fss_scales:
-        npz_payload[f"fss_s{s}"] = np.array(
-            [_mean(fss_by_scale_step[s][t]) for t in range(T_out)]
-        )
+    # FSS per probability threshold per scale per step
+    if li_idx is not None:
+        npz_payload["fss_prob_thresholds"] = np.array(fss_prob_thresholds)
+        for thr in fss_prob_thresholds:
+            for s in fss_scales:
+                npz_payload[f"fss_thr{thr}_s{s}"] = np.array(
+                    [_mean(fss_by_thr_scale_step[thr][s][t]) for t in range(T_out)]
+                )
     # PR / calibration: concatenated and subsampled (already bounded)
     pr_steps_arr = list(pr_steps)
     npz_payload["pr_steps"] = np.array(pr_steps_arr)
@@ -1497,12 +1793,15 @@ def run_test_evaluation(args):
         logger.info("\n" + "=" * 52)
         logger.info("  LIGHTNING METRICS")
         logger.info("=" * 52)
-        for k in ["csi_mean","csi_1h","csi_6h","pod_mean",
-                  "far_mean","brier_mean"]:
-            if k in summary:
-                logger.info(f"  {k:<22s}: {summary[k]:.4f}")
-        for k in sorted([k for k in summary if k.startswith("fss_scale")]):
-            logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+        logger.info(f"  {'brier_mean':<28s}: {summary.get('brier_mean', float('nan')):.4f}")
+        for thr in fss_prob_thresholds:
+            logger.info(f"  --- prob threshold = {thr} ---")
+            for k in [f"csi_mean_thr{thr}", f"csi_1h_thr{thr}",
+                      f"pod_mean_thr{thr}", f"far_mean_thr{thr}"]:
+                if k in summary:
+                    logger.info(f"  {k:<28s}: {summary[k]:.4f}")
+        for k in sorted(k for k in summary if k.startswith("fss_thr")):
+            logger.info(f"  {k:<28s}: {summary[k]:.4f}")
     logger.info("=" * 52)
 
     return summary
@@ -1529,8 +1828,14 @@ if __name__ == "__main__":
     p.add_argument("--batch_size",    type=int,   default=4)
     p.add_argument("--num_workers",   type=int,   default=4)
     p.add_argument("--img_size",      nargs=2, type=int, default=[256, 256])
-    p.add_argument("--li_threshold",  type=float, default=0.1,
-                   help="Normalised LI threshold for binary metrics")
+    p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
+                   default=[0.1, 0.3, 0.5],
+                   help="Ensemble probability thresholds used to binarise pred_prob "
+                        "before computing FSS (the only metric that still needs a "
+                        "fixed threshold — all others sweep thresholds internally). "
+                        "Each value gives one FSS curve on the spatial-scale plot.")
+    p.add_argument("--li_event_threshold", type=float, default=0.1,
+                   help="Normalised LI value above which a pixel is considered a lightning event. Used to binarise both the ground-truth LI field and each ensemble member before computing CSI/POD/FAR/FSS/Brier. The PR curve operates on the resulting ensemble probability, not on raw LI values, so no second threshold is needed there.")
     p.add_argument("--gpu",           type=int,   default=0)
     p.add_argument("--plot",          action="store_true",
                    help="Save full forecast PNGs for each test sequence")

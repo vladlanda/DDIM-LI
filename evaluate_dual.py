@@ -44,12 +44,12 @@ from tqdm import tqdm
 
 # Reuse all metric functions, plot helpers, and _regenerate_plots from evaluate.py
 from evaluate import (
-    HAS_SKIMAGE, HAS_CUML,
+    _li_to_physical,
+    HAS_SKIMAGE,
     generate_ensemble,
-    crps_energy, cloud_metrics, lightning_contingency,
-    fss, brier_score, spread_skill,
+    crps_energy, cloud_metrics, lightning_skill_curve,
+    fss, spread_skill,
     plot_forecast, _regenerate_plots,
-    _pr_curve, _auc,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,12 +249,11 @@ def run_dual_evaluation(args):
     cloud_acc = {ch: _StepAccumulator(T_out, n_cloud_metrics, device)
                  for ch in cloud_chs}
 
-    # Lightning: CSI, POD, FAR, Brier, FSS-per-scale
-    n_li_metrics = 4 + len(fss_scales)
+    # Lightning — Brier is all_reduced; skill curves come from PR data.
+    fss_prob_thresholds = args.fss_prob_thresholds
+    n_li_metrics = 1   # Brier only (threshold-free scalar)
     li_acc = _StepAccumulator(T_out, n_li_metrics, device) if li_idx is not None else None
 
-    # PR / calibration: variable-length per step — saved to temp file,
-    # rank 0 concatenates after the loop
     pr_steps  = list(range(T_out))
     pr_probs  = {t: [] for t in pr_steps}
     pr_labels = {t: [] for t in pr_steps}
@@ -310,13 +309,14 @@ def run_dual_evaluation(args):
                             cloud_acc[ch].add(t, vals)
 
                 if li_idx is not None:
-                    pred_prob = (ens_t[:, li_idx] > args.li_threshold).mean(axis=0)
-                    obs_bin   = (tgt_t[li_idx] > args.li_threshold).astype(np.float32)
+                    obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
+                    ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
+                                          for m in range(ens_t.shape[0])])
+                    obs_bin   = (obs_phys > 0).astype(np.float32)
+                    pred_prob = (ens_phys > 0).mean(axis=0).astype(np.float32)
 
-                    ct      = lightning_contingency(pred_prob, obs_bin)
-                    bs      = brier_score(pred_prob, obs_bin)
-                    fss_vals = [fss(pred_prob, obs_bin, scale=s) for s in fss_scales]
-                    li_acc.add(t, [ct["csi"], ct["pod"], ct["far"], bs] + fss_vals)
+                    sk = lightning_skill_curve(pred_prob, obs_bin)
+                    li_acc.add(t, [sk["brier"]])
 
                     if t in pr_steps:
                         flat_prob = pred_prob.ravel()
@@ -438,21 +438,10 @@ def run_dual_evaluation(args):
             if HAS_SKIMAGE and cm is not None and cm.shape[1] > 2:
                 row[f"ssim_{ch}"] = _m(cm, t, 2)
         if li_means is not None:
-            row.update({
-                "csi":   _m(li_means, t, 0),
-                "pod":   _m(li_means, t, 1),
-                "far":   _m(li_means, t, 2),
-                "brier": _m(li_means, t, 3),
-                "fss":   _m(li_means, t, 4 + len(fss_scales) // 2),
-            })
+            row["brier"] = _m(li_means, t, 0)
         per_step.append(row)
 
     fss_summary = {}
-    if li_means is not None:
-        for si, s in enumerate(fss_scales):
-            fss_summary[f"fss_scale{s}"] = float(
-                np.mean([_m(li_means, t, 4 + si) for t in range(T_out)])
-            )
 
     def _mean_over_steps(key):
         vals = [r[key] for r in per_step if key in r and r[key] == r[key]]
@@ -476,15 +465,7 @@ def run_dual_evaluation(args):
         if f"ssim_{ch}" in per_step[0]:
             summary[f"ssim_{ch}_mean"] = _mean_over_steps(f"ssim_{ch}")
     if li_means is not None:
-        summary.update({
-            "csi_mean":   _mean_over_steps("csi"),
-            "csi_1h":     float(np.mean([per_step[t]["csi"] for t in range(min(6, T_out))])),
-            "csi_6h":     per_step[-1]["csi"],
-            "pod_mean":   _mean_over_steps("pod"),
-            "far_mean":   _mean_over_steps("far"),
-            "brier_mean": _mean_over_steps("brier"),
-            **fss_summary,
-        })
+        summary.update({"brier_mean": _mean_over_steps("brier"), **fss_summary})
 
     # ---- Save JSON ----
     json_path = os.path.join(args.output_dir, "metrics_summary.json")
@@ -517,10 +498,7 @@ def run_dual_evaluation(args):
         "pr_steps":      np.array(pr_steps),
     }
     if li_means is not None:
-        for si, s in enumerate(fss_scales):
-            npz_payload[f"fss_s{s}"] = np.array(
-                [_m(li_means, t, 4 + si) for t in range(T_out)]
-            )
+        npz_payload["fss_prob_thresholds"] = np.array(fss_prob_thresholds)
         for t in pr_steps:
             if pr_probs[t]:
                 npz_payload[f"pr_prob_{t}"]   = np.concatenate(pr_probs[t])
@@ -549,11 +527,9 @@ def run_dual_evaluation(args):
         logger.info("\n" + "=" * 52)
         logger.info("  LIGHTNING METRICS")
         logger.info("=" * 52)
-        for k in ["csi_mean", "csi_1h", "csi_6h", "pod_mean", "far_mean", "brier_mean"]:
-            if k in summary:
-                logger.info(f"  {k:<22s}: {summary[k]:.4f}")
-        for k in sorted(k for k in summary if k.startswith("fss_scale")):
-            logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+        if "brier_mean" in summary:
+            logger.info(f"  {'brier_mean':<22s}: {summary['brier_mean']:.4f}")
+        logger.info("  (CSI/POD/FAR: see skill_curves_lightning.png)")
     logger.info("=" * 52)
 
     _cleanup_ddp()
@@ -577,7 +553,9 @@ if __name__ == "__main__":
     p.add_argument("--batch_size",    type=int,   default=4)
     p.add_argument("--num_workers",   type=int,   default=4)
     p.add_argument("--img_size",      nargs=2, type=int, default=[256, 256])
-    p.add_argument("--li_threshold",  type=float, default=0.1)
+    p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
+                   default=[0.1, 0.3, 0.5],
+                   help="Ensemble probability thresholds for FSS.")
     p.add_argument("--fss_scales",    nargs="+", type=int, default=[1, 2, 4, 8, 16, 32])
     p.add_argument("--pixel_size_km", type=float, default=4.0)
     p.add_argument("--plot",          action="store_true")

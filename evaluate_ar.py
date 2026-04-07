@@ -29,11 +29,11 @@ from tqdm import tqdm
 
 # Reuse all metric functions and plot helpers from evaluate.py
 from evaluate import (
-    HAS_SKIMAGE, HAS_CUML,
-    crps_energy, cloud_metrics, lightning_contingency,
-    fss, brier_score, spread_skill,
+    _li_to_physical,
+    HAS_SKIMAGE,
+    crps_energy, cloud_metrics, lightning_skill_curve,
+    fss, spread_skill,
     plot_forecast, _regenerate_plots,
-    _pr_curve, _auc,
 )
 
 logger = logging.getLogger(__name__)
@@ -205,11 +205,13 @@ def run_ar_evaluation(args):
     rmse_by_ch_step = {ch: [[] for _ in range(T_ar)] for ch in cloud_chs}
     mae_by_ch_step  = {ch: [[] for _ in range(T_ar)] for ch in cloud_chs}
     ssim_by_ch_step = {ch: [[] for _ in range(T_ar)] for ch in cloud_chs}
-    csi_by_step   = [[] for _ in range(T_ar)]
-    pod_by_step   = [[] for _ in range(T_ar)]
-    far_by_step   = [[] for _ in range(T_ar)]
-    brier_by_step = [[] for _ in range(T_ar)]
-    fss_by_scale_step = {s: [[] for _ in range(T_ar)] for s in fss_scales}
+    fss_prob_thresholds = args.fss_prob_thresholds
+    skill_by_step = [[] for _ in range(T_ar)]
+    brier_by_step = [[] for _ in range(T_ar)]   # kept for backward compat
+    fss_by_thr_scale_step = {
+        thr: {s: [[] for _ in range(T_ar)] for s in fss_scales}
+        for thr in fss_prob_thresholds
+    }
     pr_steps  = list(range(T_ar))
     pr_probs  = {t: [] for t in pr_steps}
     pr_labels = {t: [] for t in pr_steps}
@@ -267,15 +269,20 @@ def run_ar_evaluation(args):
                                 ssim_by_ch_step[ch][t].append(cm[ch]["ssim"])
 
                 if li_idx is not None:
-                    pred_prob = (ens_t[:, li_idx] > args.li_threshold).mean(axis=0)
-                    obs_bin   = (tgt_t[li_idx] > args.li_threshold).astype(np.float32)
-                    ct = lightning_contingency(pred_prob, obs_bin)
-                    csi_by_step[t].append(ct["csi"])
-                    pod_by_step[t].append(ct["pod"])
-                    far_by_step[t].append(ct["far"])
-                    brier_by_step[t].append(brier_score(pred_prob, obs_bin))
-                    for s in fss_scales:
-                        fss_by_scale_step[s][t].append(fss(pred_prob, obs_bin, scale=s))
+                    obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
+                    ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
+                                          for m in range(ens_t.shape[0])])
+                    obs_bin   = (obs_phys > 0).astype(np.float32)
+                    pred_prob = (ens_phys > 0).mean(axis=0).astype(np.float32)
+
+                    sk = lightning_skill_curve(pred_prob, obs_bin)
+                    skill_by_step[t].append(sk)
+                    brier_by_step[t].append(sk["brier"])
+                    for thr in fss_prob_thresholds:
+                        for s in fss_scales:
+                            fss_by_thr_scale_step[thr][s][t].append(
+                                fss(pred_prob, obs_bin, scale=s)
+                            )
                     if t in pr_steps:
                         flat_prob = pred_prob.ravel()
                         flat_lbl  = obs_bin.ravel()
@@ -305,8 +312,14 @@ def run_ar_evaluation(args):
             seq_counter += 1
 
         live_crps = float(np.mean([np.mean(v) for v in crps_by_step if v]))
-        live_csi  = float(np.mean([np.mean(v) for v in csi_by_step if v])) \
-                    if li_idx is not None else float("nan")
+        if li_idx is not None and skill_by_step[0]:
+            live_csi = float(np.mean([
+                float(np.interp(0.5, sc["thresholds"][::-1], sc["csi"][::-1]))
+                for step_list in skill_by_step for sc in step_list
+                if len(sc["thresholds"]) > 0
+            ]))
+        else:
+            live_csi = float("nan")
         batch_bar.set_postfix(crps=f"{live_crps:.4f}", csi=f"{live_csi:.3f}", refresh=False)
 
     # ---- Aggregate ----
@@ -328,13 +341,21 @@ def run_ar_evaluation(args):
             if ssim_by_ch_step[ch][t]:
                 row[f"ssim_{ch}"] = _mean(ssim_by_ch_step[ch][t])
         if li_idx is not None:
-            row.update({
-                "csi":   _mean(csi_by_step[t]),
-                "pod":   _mean(pod_by_step[t]),
-                "far":   _mean(far_by_step[t]),
-                "brier": _mean(brier_by_step[t]),
-                "fss":   _mean(fss_by_scale_step[fss_scales[len(fss_scales)//2]][t]),
-            })
+            row["brier"] = _mean(brier_by_step[t])
+            if skill_by_step[t]:
+                for thr in fss_prob_thresholds:
+                    mid_s = fss_scales[len(fss_scales) // 2]
+                    row[f"fss_{thr}"] = _mean(fss_by_thr_scale_step[thr][mid_s][t])
+                for thr in fss_prob_thresholds:
+                    row[f"csi_{thr}"] = float(np.mean([
+                        float(np.interp(thr, sc["thresholds"][::-1], sc["csi"][::-1]))
+                        for sc in skill_by_step[t]]))
+                    row[f"pod_{thr}"] = float(np.mean([
+                        float(np.interp(thr, sc["thresholds"][::-1], sc["pod"][::-1]))
+                        for sc in skill_by_step[t]]))
+                    row[f"far_{thr}"] = float(np.mean([
+                        float(np.interp(thr, sc["thresholds"][::-1], sc["far"][::-1]))
+                        for sc in skill_by_step[t]]))
         per_step.append(row)
 
     summary = {
@@ -357,18 +378,14 @@ def run_ar_evaluation(args):
         if not all(np.isnan(ssim_vals)):
             summary[f"ssim_{ch}_mean"] = _mean(ssim_vals)
     if li_idx is not None:
-        fss_summary = {f"fss_scale{s}":
-                       _mean([_mean(fss_by_scale_step[s][t]) for t in range(T_ar)])
-                       for s in fss_scales}
-        summary.update({
-            "csi_mean":   _mean([r["csi"]   for r in per_step]),
-            "csi_1h":     _mean([r["csi"]   for r in per_step[:6]]),
-            "csi_6h":     per_step[-1]["csi"],
-            "pod_mean":   _mean([r["pod"]   for r in per_step]),
-            "far_mean":   _mean([r["far"]   for r in per_step]),
-            "brier_mean": _mean([r["brier"] for r in per_step]),
-            **fss_summary,
-        })
+        fss_summary = {}
+        for thr in fss_prob_thresholds:
+            for s in fss_scales:
+                fss_summary[f"fss_thr{thr}_scale{s}"] = _mean(
+                    [_mean(fss_by_thr_scale_step[thr][s][t]) for t in range(T_ar)]
+                )
+        summary.update({"brier_mean": _mean([r["brier"] for r in per_step]),
+                         **fss_summary})
 
     # ---- Save outputs ----
     json_path = os.path.join(args.output_dir, "metrics_summary.json")
@@ -396,10 +413,12 @@ def run_ar_evaluation(args):
         "pr_steps":      np.array(pr_steps),
     }
     if li_idx is not None:
-        for si, s in enumerate(fss_scales):
-            npz_payload[f"fss_s{s}"] = np.array(
-                [_mean(fss_by_scale_step[s][t]) for t in range(T_ar)]
-            )
+        npz_payload["fss_prob_thresholds"] = np.array(fss_prob_thresholds)
+        for thr in fss_prob_thresholds:
+            for s in fss_scales:
+                npz_payload[f"fss_thr{thr}_s{s}"] = np.array(
+                    [_mean(fss_by_thr_scale_step[thr][s][t]) for t in range(T_ar)]
+                )
         for t in pr_steps:
             if pr_probs[t]:
                 npz_payload[f"pr_prob_{t}"]   = np.concatenate(pr_probs[t])
@@ -422,9 +441,9 @@ def run_ar_evaluation(args):
         logger.info("\n" + "=" * 52)
         logger.info("  AR MODEL — LIGHTNING METRICS")
         logger.info("=" * 52)
-        for k in ["csi_mean", "csi_1h", "csi_6h", "pod_mean", "far_mean", "brier_mean"]:
-            if k in summary:
-                logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+        if "brier_mean" in summary:
+            logger.info(f"  {'brier_mean':<22s}: {summary['brier_mean']:.4f}")
+        logger.info("  (CSI/POD/FAR: see skill_curves_lightning.png)")
     logger.info("=" * 52)
     return summary
 
@@ -447,7 +466,9 @@ if __name__ == "__main__":
                    help="Smaller than direct model — AR rollout uses more GPU memory")
     p.add_argument("--num_workers",   type=int,   default=4)
     p.add_argument("--img_size",      nargs=2, type=int, default=[256, 256])
-    p.add_argument("--li_threshold",  type=float, default=0.1)
+    p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
+                   default=[0.1, 0.3, 0.5],
+                   help="Ensemble probability thresholds for FSS.")
     p.add_argument("--gpu",           type=int,   default=0)
     p.add_argument("--fss_scales",    nargs="+", type=int, default=[1, 2, 4, 8, 16, 32])
     p.add_argument("--pixel_size_km", type=float, default=4.0)

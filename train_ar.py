@@ -45,7 +45,7 @@ except ImportError:
 from dataset import make_dataloaders
 from model import UNet, EDMPrecond, EDMSchedule
 from model_ar import ARPrecond, ARDenoiser, ar_training_loss
-from evaluate import fast_val_metrics   # reuse cheap val — operates on single-step residuals
+from evaluate import fast_val_metrics_ar   # AR-specific cheap val (no lead_idx)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -294,7 +294,7 @@ def train(args):
     if args.extend:
         if main:
             logger.info("Extend mode: baseline validation ...")
-        baseline = fast_val_metrics(
+        baseline = fast_val_metrics_ar(
             raw_model, val_loader, schedule, device,
             channels=channels, val_samples=args.val_samples,
         )
@@ -370,7 +370,7 @@ def train(args):
         if ddp_active():
             dist.barrier()
 
-        val_metrics = fast_val_metrics(
+        val_metrics = fast_val_metrics_ar(
             raw_model, val_loader, schedule, device,
             channels=channels, val_samples=args.val_samples,
         )

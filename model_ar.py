@@ -26,12 +26,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-# Re-use all building blocks from model.py
+# Re-use building blocks from model.py
 from model import (
-    FourierEmbedding,
-    AdaGroupNorm,
-    ResBlock,
-    SelfAttentionBlock,
     UNet,
     EDMPrecond,
     EDMSchedule,
@@ -197,6 +193,7 @@ def ar_training_loss(
     last_ctx = batch["last_ctx"].to(device)  # (B, C, H, W)
 
     B, T_out, C, H, W = target.shape
+    _, T_in, _, _, _  = context.shape
 
     # Randomly sample one target step per batch item
     step_idx = torch.randint(0, T_out, (B,), device=device)

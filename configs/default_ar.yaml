@@ -20,19 +20,25 @@
 # Data
 # ----------------------------------------------------------
 train_roots:
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_1
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_2
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_3
+  # - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
 
+# Held-out regions — NEVER used during training.
+# Only passed to evaluate.py after training is complete.
 test_roots:
-  - /media/vladlanda/T5EVO/Postdoc/Tel Aviv/Code/DATASET/datasets/central_africa_4
+  # - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
 
-train_val_split: 0.7
-channels: [ir, li, ch1, ch2]
-T_in:     6        # context frames (same as direct model)
-T_out:    36       # stored in dataset for AR context building; AR predicts 1 at a time
+  
+train_val_split: 0.8
+channels: [ir, li, ch0, ch1]
+
+T_in:     18        # context frames (same as direct model)
+T_out:    6       # stored in dataset for AR context building; AR predicts 1 at a time
 dt_min:   10
-img_size: [256, 256]
+img_size: [64, 64]
 max_samples: null
 
 # ----------------------------------------------------------
@@ -58,7 +64,7 @@ sigma_max:  80.0
 # Training
 # ----------------------------------------------------------
 epochs:          200
-batch_size:      8        # larger than direct model (single-step target)
+batch_size:      16        # larger than direct model (single-step target)
 lr:              1.0e-4
 weight_decay:    1.0e-4
 grad_clip:       1.0
@@ -72,7 +78,7 @@ li_weight:       3.0
 # ----------------------------------------------------------
 # Inference / evaluation
 # ----------------------------------------------------------
-T_ar:       36       # autoregressive steps to unroll at eval/infer time
+T_ar:       6       # autoregressive steps to unroll at eval/infer time
 n_members:  10
 cfg_scale:  1.5
 
@@ -80,9 +86,9 @@ cfg_scale:  1.5
 # Validation & logging
 # ----------------------------------------------------------
 slow_val:     false      # AR rollout is slow — keep fast val during training
-val_every:    5
+val_every:    10
 val_samples:  -1
 
-output_dir:      outputs/run_ar
+output_dir:      outputs/fh1_dh3_dim64_ar
 resume:          false
 wandb_project:   "DDIM-LI-AR"
