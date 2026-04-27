@@ -249,10 +249,14 @@ def run_dual_evaluation(args):
     cloud_acc = {ch: _StepAccumulator(T_out, n_cloud_metrics, device)
                  for ch in cloud_chs}
 
-    # Lightning — Brier is all_reduced; skill curves come from PR data.
+    # Lightning — Brier is all_reduced; FSS computed locally (spatial, variable-length).
     fss_prob_thresholds = args.fss_prob_thresholds
     n_li_metrics = 1   # Brier only (threshold-free scalar)
     li_acc = _StepAccumulator(T_out, n_li_metrics, device) if li_idx is not None else None
+    fss_by_thr_scale_step = {
+        thr: {s: [[] for _ in range(T_out)] for s in fss_scales}
+        for thr in fss_prob_thresholds
+    } if li_idx is not None else {}
 
     pr_steps  = list(range(T_out))
     pr_probs  = {t: [] for t in pr_steps}
@@ -317,6 +321,14 @@ def run_dual_evaluation(args):
 
                     sk = lightning_skill_curve(pred_prob, obs_bin)
                     li_acc.add(t, [sk["brier"]])
+
+                    # FSS: binarise pred_prob at each threshold before neighbourhood filter
+                    for thr in fss_prob_thresholds:
+                        pred_bin_thr = (pred_prob >= thr).astype(np.float32)
+                        for s in fss_scales:
+                            fss_by_thr_scale_step[thr][s][t].append(
+                                fss(pred_bin_thr, obs_bin, scale=s)
+                            )
 
                     if t in pr_steps:
                         flat_prob = pred_prob.ravel()
@@ -499,6 +511,18 @@ def run_dual_evaluation(args):
     }
     if li_means is not None:
         npz_payload["fss_prob_thresholds"] = np.array(fss_prob_thresholds)
+        # FSS: reduce via all_reduce (scalar sums per step)
+        for thr in fss_prob_thresholds:
+            for s in fss_scales:
+                local_fss = np.array([np.mean(fss_by_thr_scale_step[thr][s][t])
+                                      if fss_by_thr_scale_step[thr][s][t] else 0.0
+                                      for t in range(T_out)], dtype=np.float32)
+                fss_t = torch.tensor(local_fss, device=device)
+                if _is_ddp(): dist.all_reduce(fss_t, op=dist.ReduceOp.SUM)
+                if main:
+                    # divide by world_size to get mean across ranks
+                    ws = dist.get_world_size() if _is_ddp() else 1
+                    npz_payload[f"fss_thr{thr}_s{s}"] = (fss_t / ws).cpu().numpy()
         for t in pr_steps:
             if pr_probs[t]:
                 npz_payload[f"pr_prob_{t}"]   = np.concatenate(pr_probs[t])

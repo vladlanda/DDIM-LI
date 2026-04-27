@@ -580,3 +580,195 @@ def make_test_loader(
         test_ds, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
     )
+
+
+# ===================================================================
+# CLI: visualise a single sequence  (python dataset.py --help)
+# ===================================================================
+
+# ===================================================================
+# CLI: visualise a single sequence  (python dataset.py --help)
+#
+# Plot sequence 0 (default) — opens matplotlib window
+#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
+#
+# Plot sequence 42 and also save to PNG
+#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --idx 42 --out seq42.png
+#
+# Different channels / longer horizon
+#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --idx 10 --channels ir li ch1 ch2 --T_in 6 --T_out 36 --out full_6h.png
+#
+# Normalised space instead of physical
+#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --no_physical
+#
+# ===================================================================
+
+if __name__ == "__main__":
+    import argparse
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    p = argparse.ArgumentParser(
+        description="Plot T_in context + T_out target frames for one sequence."
+    )
+    p.add_argument("root",          help="Dataset root directory")
+    p.add_argument("--idx",         type=int, default=0,
+                   help="Sequence index to visualise (default: 0)")
+    p.add_argument("--channels",    nargs="+", default=["ir", "li", "ch1", "ch2"],
+                   help="Channels to load")
+    p.add_argument("--T_in",        type=int, default=6)
+    p.add_argument("--T_out",       type=int, default=6)
+    p.add_argument("--img_size",    nargs=2, type=int, default=[256, 256])
+    p.add_argument("--stat_path",   default=None,
+                   help="Path to channel_stats.json (computed on-the-fly if absent)")
+    p.add_argument("--out",         default=None,
+                   help="Also save to this PNG path (optional)")
+    p.add_argument("--physical",    action="store_true", default=True,
+                   help="Denormalise to physical units before plotting (default: true)")
+    p.add_argument("--no_physical", dest="physical", action="store_false",
+                   help="Plot in normalised space")
+    args = p.parse_args()
+
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+    print(args)
+    # ---- Build dataset ------------------------------------------------
+    # stat_path is optional — if None, stats are computed on-the-fly and not cached.
+    # Pass --stat_path to reuse pre-computed stats and skip the computation.
+    stat_path = args.stat_path  # may be None
+    ds = METSATDataset(
+        root         = args.root,
+        channel_list = args.channels,
+        T_in         = args.T_in,
+        T_out        = args.T_out,
+        img_size     = tuple(args.img_size),
+        stat_path    = stat_path,
+        augment      = False,
+    )
+
+    n = len(ds)
+    if n == 0:
+        raise RuntimeError(f"No valid sequences found in {args.root}")
+    idx = args.idx % n
+    logger.info(f"Dataset: {n} sequences  |  plotting index {idx}")
+
+    sample   = ds[idx]
+    stats    = ds.stats
+    channels = args.channels
+    C        = len(channels)
+
+    # ---- Reconstruct absolute frames ----------------------------------
+    # context : (T_in,  C, H, W)  normalised absolute
+    # target  : (T_out, C, H, W)  normalised residuals  → add last_ctx
+    ctx_norm = sample["context"].numpy()                   # (T_in, C, H, W)
+    tgt_res  = sample["target"].numpy()                    # (T_out, C, H, W)
+    last_ctx = sample["last_ctx"].numpy()                  # (C, H, W)
+    tgt_norm = tgt_res + last_ctx[None]                    # (T_out, C, H, W) absolute
+
+    all_frames_norm = np.concatenate([ctx_norm, tgt_norm], axis=0)  # (T_in+T_out, C, H, W)
+    T_total = args.T_in + args.T_out
+
+    # ---- Optionally denormalise to physical units ----------------------
+    if args.physical:
+        all_frames = np.zeros_like(all_frames_norm)
+        for ci, ch in enumerate(channels):
+            if ch in stats:
+                all_frames[:, ci] = denormalize(all_frames_norm[:, ci], stats, ch)
+            else:
+                all_frames[:, ci] = all_frames_norm[:, ci]
+        unit_suffix = " (physical)"
+    else:
+        all_frames  = all_frames_norm
+        unit_suffix = " (normalised)"
+
+    # ---- Plot ----------------------------------------------------------
+    # Layout: C rows × T_total columns
+    # Each cell is one channel at one timestep.
+    # Context frames have a light-blue background; target frames white.
+    cell_w, cell_h = 1.6, 1.8
+    fig_w = T_total * cell_w
+    fig_h = C * cell_h + 0.6          # extra for suptitle
+
+    fig, axes = plt.subplots(
+        C, T_total,
+        figsize     = (fig_w, fig_h),
+        squeeze     = False,
+        gridspec_kw = {"wspace": 0.03, "hspace": 0.08},
+    )
+    fig.patch.set_facecolor("white")
+
+    # Choose colourmap per channel: grey for IR/cloud, hot for LI
+    cmaps = []
+    for ch in channels:
+        cmaps.append("hot" if ch == "li" else "gray")
+
+    font_t = max(4, min(7, int(100 / T_total)))
+
+    for ci, (ch, cmap) in enumerate(zip(channels, cmaps)):
+        # Compute consistent vmin/vmax across all timesteps for this channel
+        ch_data = all_frames[:, ci]                        # (T_total, H, W)
+        vmin, vmax = float(ch_data.min()), float(ch_data.max())
+        if vmin == vmax:
+            vmax = vmin + 1e-6
+
+        for t in range(T_total):
+            ax = axes[ci, t]
+            ax.imshow(ch_data[t], cmap=cmap, vmin=vmin, vmax=vmax,
+                      interpolation="nearest")
+            ax.axis("off")
+
+            # Column header: timestep label on top row only
+            if ci == 0:
+                if t < args.T_in:
+                    label = f"ctx-{args.T_in - t}"
+                    bg    = "#dce8f5"
+                else:
+                    step_min = (t - args.T_in + 1) * 10
+                    label = f"+{step_min}m"
+                    bg    = "white"
+                ax.set_title(label, fontsize=font_t, pad=2,
+                             backgroundcolor=bg, color="black")
+
+            # Row label: channel name on leftmost column only
+            if t == 0:
+                ax.set_ylabel(ch + unit_suffix,
+                              fontsize=font_t + 1, rotation=90,
+                              labelpad=3, color="black", va="center")
+                ax.yaxis.set_label_position("left")
+                ax.axis("on")
+                ax.tick_params(left=False, bottom=False,
+                               labelleft=False, labelbottom=False)
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+
+    # Divider line between context and target
+    # Draw as figure-level line at the boundary column
+    boundary_x = args.T_in / T_total
+    fig.add_artist(
+        plt.Line2D(
+            [boundary_x, boundary_x], [0.04, 0.96],
+            transform = fig.transFigure,
+            color     = "#e05050",
+            linewidth = 1.2,
+            linestyle = "--",
+        )
+    )
+    fig.text(boundary_x + 0.005, 0.97, "▶ Forecast",
+             ha="left", va="top", fontsize=8, color="#e05050",
+             transform=fig.transFigure)
+    fig.text(boundary_x - 0.005, 0.97, "Context ◀",
+             ha="right", va="top", fontsize=8, color="#3266ad",
+             transform=fig.transFigure)
+
+    plt.suptitle(
+        f"Sequence {idx}/{n-1}  |  {args.T_in} context + {args.T_out} target frames"
+        f"  |  root: {os.path.basename(args.root.rstrip(os.sep))}",
+        fontsize=9, y=1.002, color="black",
+    )
+
+    if args.out:
+        plt.savefig(args.out, dpi=120, bbox_inches="tight", facecolor="white")
+        logger.info(f"Saved → {args.out}")
+    plt.tight_layout()
+    plt.show()
+    plt.close(fig)

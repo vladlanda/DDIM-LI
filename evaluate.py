@@ -1602,12 +1602,15 @@ def run_test_evaluation(args):
                         lightning_skill_curve(pred_prob, obs_bin)
                     )
 
-                    # FSS at each requested probability threshold (spatial metric,
-                    # no sklearn equivalent — keep scipy uniform_filter)
+                    # FSS: binarise pred_prob at each threshold first.
+                    # pred_prob is a continuous ensemble probability in [0,1];
+                    # FSS needs a binary forecast field, so we threshold it at thr
+                    # before applying the neighbourhood filter.
                     for thr in fss_prob_thresholds:
+                        pred_bin_thr = (pred_prob >= thr).astype(np.float32)
                         for s in fss_scales:
                             fss_by_thr_scale_step[thr][s][t].append(
-                                fss(pred_prob, obs_bin, scale=s)
+                                fss(pred_bin_thr, obs_bin, scale=s)
                             )
 
                     if t in pr_steps:

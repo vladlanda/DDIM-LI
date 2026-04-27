@@ -576,6 +576,6 @@ def edm_training_loss(
     lw = schedule.edm_loss_weight(sigma)[:, None, None, None]
 
     mse  = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, li_weight)
-    spec = spectral_loss(pred, y, spectral_weight)
-
-    return mse + spec
+    # spec = spectral_loss(pred, y, spectral_weight)
+    # return mse + spec
+    return mse

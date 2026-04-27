@@ -33,7 +33,7 @@ channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
   - ch1
  
 T_in:    18          # context frames  (6 × 10 min = 1 hour)
-T_out:   36         # forecast steps  (36 × 10 min = 6 hours)
+T_out:   6         # forecast steps  (36 × 10 min = 6 hours)
 dt_min:  10         # minutes between frames
 img_size: [64, 64]
  
@@ -51,7 +51,7 @@ num_res_blocks:    2
 attn_resolutions:  [16, 8]        # apply self-attention at these spatial sizes
 dropout:           0.1
 emb_dim:           512            # conditioning embedding dimension
-sigma_data:        0.5            # EDM sigma_data (≈ std of normalised targets)
+sigma_data:        1.0            # EDM sigma_data (≈ std of normalised targets)
  
 # ----------------------------------------------------------
 # EDM noise schedule
@@ -68,9 +68,9 @@ sigma_max:  80.0
 # With 2 × RTX 5090 and batch_size=4 → effective batch = 8.
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
-epochs:         100
+epochs:         550
 batch_size:     64
-lr:             1.0e-4
+lr:             1.0e-6
 weight_decay:   1.0e-4
 grad_clip:      1.0
 ema_decay:      0.9999
@@ -80,7 +80,7 @@ num_workers:    4          # per GPU; total CPU workers = num_workers × num_gpu
 # Loss weights
 cfg_drop_prob:    0.15     # probability of nulling context (for CFG training)
 spectral_weight:  0.1      # FFT magnitude loss weight
-li_weight:        3.0      # upweight lightning channel in MSE
+li_weight:        30.0      # upweight lightning channel in MSE
  
 # ----------------------------------------------------------
 # Validation & logging
@@ -92,6 +92,6 @@ val_samples:  -1           # batches for both fast (every epoch) and slow (every
 n_members:    1            # ensemble members during validation (1 = fast, 10 = full probabilistic)
 cfg_scale:    1.5          # classifier-free guidance scale at inference
  
-output_dir:      outputs/h6_dh3_dim64
+output_dir:      outputs/pred_1h_input_3h_dim_64
 resume:          true
 wandb_project:   "DDIM-LI"        # set to your project name to enable WandB
