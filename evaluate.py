@@ -63,6 +63,8 @@ def generate_ensemble(
     n_members:  int   = 10,
     num_steps:  int   = 20,
     cfg_scale:  float = 1.5,
+    S_churn:    float = 40.0,        
+    S_noise:    float = 1.003,
 ) -> torch.Tensor:
     """
     Returns ensemble of shape (B, M, T_out, C, H, W).
@@ -102,6 +104,8 @@ def generate_ensemble(
                 num_steps=num_steps,
                 sigma_min=model.precond.sigma_data * 0.01,
                 sigma_max=80.0,
+                S_churn=S_churn,       
+                S_noise=S_noise,       
             )
             all_steps.append(pred)
 
@@ -1559,6 +1563,8 @@ def run_test_evaluation(args):
             model, context, ch_mask, device,
             n_members = args.n_members,
             cfg_scale = args.cfg_scale,
+            S_churn=args.S_churn,       
+            num_steps=args.num_steps,   
         )  # (B, M, T_out, C, H, W) residuals
 
         # Reconstruct absolute normalised frames before all metric computation
@@ -1851,5 +1857,12 @@ if __name__ == "__main__":
                    help="Neighbourhood half-widths (pixels) for FSS curve")
     p.add_argument("--pixel_size_km", type=float, default=4.0,
                    help="Pixel size in km — used to label FSS x-axis in km")
+    
+    p.add_argument("--S_churn",   type=float, default=40.0,
+               help="EDM stochastic churn. Higher = more ensemble diversity. "
+                    "0 = deterministic DDIM. Try 20, 40, 80.")
+    p.add_argument("--num_steps", type=int,   default=20,
+                help="Denoising steps per ensemble member.")
+    
     args = p.parse_args()
     run_test_evaluation(args)
