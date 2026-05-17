@@ -1593,9 +1593,9 @@ def run_test_evaluation(args):
                     obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
                     ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
                                           for m in range(ens_t.shape[0])])
-                    obs_bin   = (obs_phys > 0).astype(np.float32)
-                    # Ensemble probability: fraction of members with any lightning
-                    pred_prob = (ens_phys > 0).mean(axis=0).astype(np.float32)
+                    obs_bin   = (obs_phys > args.li_event_threshold).astype(np.float32)
+                    # Ensemble probability: fraction of members exceeding threshold
+                    pred_prob = (ens_phys > args.li_event_threshold).mean(axis=0).astype(np.float32)
 
                     # Full skill curve at all unique thresholds via sklearn
                     skill_by_step[t].append(
