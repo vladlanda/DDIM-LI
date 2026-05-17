@@ -820,27 +820,34 @@ if __name__ == "__main__":
 
     # ── Section 1: context ──────────────────────────────────────────────
     section_title(0, f"① context  (T_in={T_in})  shape: ({T_in}, {C}, H, W)  "
-                     f"normalised absolute", "#1a5ea8")
+                     f"[plotted in PHYSICAL units — model receives (cbrt(x)-mean)/std]",
+                     "#1a5ea8")
     gs1 = section_grid(0, T_in)
     for ci, (ch, cmap) in enumerate(zip(args.channels, cmaps)):
         d = ctx_phys[:, ci]
         vmin, vmax = d.min(), d.max()
         if vmin == vmax: vmax += 1e-6
+        # Show normalised range in ylabel so it's clear what model sees
+        norm_data = ctx_norm[:, ci]   # (T_in, H, W) normalised
+        nmin, nmax = float(norm_data.min()), float(norm_data.max())
         for t in range(T_in):
             ax = fig.add_subplot(gs1[ci, t])
             ax.imshow(d[t], cmap=cmap, vmin=vmin, vmax=vmax,
                       interpolation="nearest")
             ax.set_xticks([]); ax.set_yticks([])
             if t == 0:
-                ax.set_ylabel(ch, fontsize=ft, rotation=0,
-                              labelpad=20, va="center")
+                ax.set_ylabel(
+                    f"{ch}\nphys [{vmin:.2f},{vmax:.2f}]\nnorm [{nmin:.1f},{nmax:.1f}]",
+                    fontsize=ft-1, rotation=0, labelpad=28, va="center"
+                )
             if ci == 0:
                 ax.set_title(f"ctx-{T_in-t}", fontsize=ft,
                              pad=2, backgroundcolor="#dce8f5")
 
     # ── Section 2: target absolute ──────────────────────────────────────
     section_title(1, f"② target absolute  (T_out={T_out})  shape: ({T_out}, {C}, H, W)  "
-                     f"= residual + last_ctx", "#1a7a3c")
+                     f"= residual + last_ctx  [physical units — for reference only]",
+                     "#1a7a3c")
     gs2 = section_grid(1, T_out)
     for ci, (ch, cmap) in enumerate(zip(args.channels, cmaps)):
         d = tgt_phys[:, ci]
@@ -861,7 +868,8 @@ if __name__ == "__main__":
 
     # ── Section 3: target residuals ─────────────────────────────────────
     section_title(2, f"③ target residuals  (T_out={T_out})  shape: ({T_out}, {C}, H, W)  "
-                     f"= target_abs - last_ctx  ← what the model predicts", "#8b3a00")
+                     f"= target_abs - last_ctx  [physical units — model predicts NORMALISED residuals]",
+                     "#8b3a00")
     gs3 = section_grid(2, T_out)
     for ci, (ch, cmap) in enumerate(zip(args.channels, cmaps)):
         d = res_phys[:, ci]
