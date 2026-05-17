@@ -83,8 +83,10 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--li_weight",        type=float, default=30.0)
     parser.add_argument("--li_weight_beta",   type=float, default=0.9999,
                         help="Beta for Cui et al. 2019 effective number formula.")
-    parser.add_argument("--oversample_factor", type=float, default=5.0,
-                        help="Lightning-active sequences oversampled N× (WeightedRandomSampler).")
+    parser.add_argument("--oversample_factor",  type=float, default=5.0,
+                        help="High-density LI sequences oversampled N× (WeightedRandomSampler).")
+    parser.add_argument("--density_percentile", type=float, default=75.0,
+                        help="Sequences with LI density above this percentile are oversampled.")
     parser.add_argument("--n_members",       type=int,   default=10)
     parser.add_argument("--cfg_scale",       type=float, default=1.5)
 

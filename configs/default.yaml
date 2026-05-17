@@ -85,8 +85,9 @@ li_weight_beta:   0.9999   # Cui et al. 2019 beta — controls dynamic weight sm
                            # 0.9999 recommended; lower = more aggressive rare-event focus
 
 # Stratified sequence sampling
-oversample_factor: 5.0     # lightning-active sequences oversampled N× via WeightedRandomSampler
-                           # 5.0 means active sequences drawn 5× more often than inactive ones
+oversample_factor:  5.0    # high-density LI sequences oversampled N× via WeightedRandomSampler
+density_percentile: 75.0   # sequences with LI density above this percentile (75th) are oversampled
+                           # 75th percentile = top 25% densest lightning sequences drawn 5× more often
  
 # ----------------------------------------------------------
 # Validation & logging

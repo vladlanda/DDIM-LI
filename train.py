@@ -194,7 +194,8 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
         stat_path         = stat_path,
         max_samples       = args.max_samples,
         train_val_split   = args.train_val_split,
-        oversample_factor = args.oversample_factor,
+        oversample_factor  = args.oversample_factor,
+        density_percentile = args.density_percentile,
     )
 
     if not ddp_active() or world_size == 1:

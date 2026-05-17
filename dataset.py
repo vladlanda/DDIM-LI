@@ -455,29 +455,33 @@ class MultiRegionDataset(Dataset):
 def compute_li_sample_weights(
     dataset,
     oversample_factor: float = 5.0,
-    li_threshold_phys: float = 2.0/255.0,   # avoids JPEG artefacts
+    density_percentile: float = 75.0,
 ) -> np.ndarray:
     """
     Compute per-sequence sampling weights for WeightedRandomSampler.
 
-    A sequence is "lightning-active" if at least one target frame contains
-    at least one pixel with physical LI > li_threshold_phys (default: any
-    non-zero pixel, consistent with the > 0 binarisation used in evaluation).
+    Context: the LI channel in this dataset is a continuous lightning index
+    that is non-zero in ~96% of frames (central Africa has very high lightning
+    frequency). Binary active/inactive splitting is therefore not meaningful —
+    virtually all sequences are "active". The real imbalance is at the pixel
+    level (~6% non-zero pixels per frame), which is handled by li_weight.
 
-    LI pixels are loaded and decoded exactly as in _load_frame — cbrt
-    transform then z-score normalisation — then inverted back to physical
-    space before thresholding. This is the same pipeline used during
-    training and evaluation, so the activity label is consistent.
+    Instead, we stratify by lightning DENSITY: sequences whose mean LI
+    pixel fraction across target frames exceeds the `density_percentile`
+    threshold are oversampled by `oversample_factor`. This ensures the model
+    sees proportionally more high-density convective events, which are the
+    hardest and most important cases to predict correctly.
 
-    Active sequences receive weight `oversample_factor`; inactive receive
-    weight 1.0. This implements the stratified sampling approach of
-    Lin et al. (2017, Focal Loss) applied at the sequence level.
+    Per-sequence mean LI density is computed by loading one representative
+    target frame per sequence (the middle target frame) and measuring the
+    fraction of pixels with value > 0. Loading all T_out frames per sequence
+    would be more accurate but prohibitively slow for 52k sequences.
 
     Args:
-        dataset           : METSATDataset instance with built index and stats
-        oversample_factor : multiplier for active sequences (default 5.0)
-        li_threshold_phys : physical LI threshold for "lightning present"
-                            (default 0.0 = any non-zero pixel)
+        dataset            : METSATDataset instance
+        oversample_factor  : weight for high-density sequences (default 5.0)
+        density_percentile : sequences above this percentile of LI density
+                             are considered high-density (default 75th pct)
 
     Returns:
         np.ndarray of shape (len(dataset),) with per-sequence weights
@@ -487,64 +491,51 @@ def compute_li_sample_weights(
         logger.warning("compute_li_sample_weights: no LI channel, returning uniform weights")
         return np.ones(len(dataset), dtype=np.float64)
 
-    li_idx    = ch_list.index("li")
-    li_mean   = dataset._norm_mean[li_idx]
-    li_std    = dataset._norm_std[li_idx]
-    is_cbrt   = dataset._cbrt_mask[li_idx]
-    h, w      = dataset.img_size
+    h, w = dataset.img_size
 
-    weights    = np.ones(len(dataset), dtype=np.float64)
-    n_active   = 0
-    n_inactive = 0
+    # ── Pass 1: compute mean LI density per sequence (one frame per seq) ────
+    densities = np.zeros(len(dataset), dtype=np.float32)
 
     for i, seq_times in enumerate(tqdm(
         dataset.valid_sequences,
-        desc  = "  Computing LI sample weights",
+        desc  = "  Computing LI densities",
         unit  = "seq",
         leave = False,
         dynamic_ncols = True,
     )):
         target_times = seq_times[dataset.T_in:]   # T_out target timestamps
-        is_active    = False
+        # Use the middle target frame as representative
+        mid_t = target_times[len(target_times) // 2]
 
-        for t in target_times:
-            if t not in dataset.index:
-                continue
-            ch_files = dataset.index[t]
-            if "li" not in ch_files:
-                continue
+        if mid_t not in dataset.index:
+            continue
+        ch_files = dataset.index[mid_t]
+        if "li" not in ch_files:
+            continue
 
-            # Load LI frame as raw physical values [0, 1]
-            # li_raw = pixel/255 is already in physical space — no inversion needed.
-            # The normalisation pipeline (cbrt → z-score) is applied at training
-            # time; here we want the raw physical value to threshold against.
-            try:
-                img = Image.open(ch_files["li"]).convert("L")
-                if img.size != (w, h):
-                    img = img.resize((w, h), Image.BILINEAR)
-                arr = np.frombuffer(img.tobytes(), dtype=np.uint8).reshape(h, w)
-                li_raw = arr.astype(np.float32) / 255.0
-            except Exception:
-                continue
+        try:
+            img = Image.open(ch_files["li"]).convert("L")
+            if img.size != (w, h):
+                img = img.resize((w, h), Image.BILINEAR)
+            arr = np.frombuffer(img.tobytes(), dtype=np.uint8).reshape(h, w)
+            densities[i] = float((arr > 0).mean())
+        except Exception:
+            densities[i] = 0.0
 
-            # Threshold in physical space.
-            # Use li_threshold_phys = 2/255 ≈ 0.008 rather than 0.0 to avoid
-            # counting JPEG compression artefacts (single-pixel values of 1/255)
-            # as lightning events.
-            if (li_raw > li_threshold_phys).any():
-                is_active = True
-                break   # one active frame is sufficient
+    # ── Pass 2: assign weights based on density percentile ──────────────────
+    threshold   = float(np.percentile(densities, density_percentile))
+    weights     = np.where(densities >= threshold,
+                           float(oversample_factor), 1.0).astype(np.float64)
 
-        if is_active:
-            weights[i] = oversample_factor
-            n_active  += 1
-        else:
-            n_inactive += 1
-
+    n_high = int((densities >= threshold).sum())
+    n_low  = len(dataset) - n_high
     logger.info(
-        f"  LI sample weights: {n_active} active (×{oversample_factor:.1f}), "
-        f"{n_inactive} inactive (×1.0)  —  "
-        f"active fraction: {n_active / max(len(dataset), 1):.3f}"
+        f"  LI density threshold (p{density_percentile:.0f}): {threshold:.4f} "
+        f"({threshold*100:.2f}% of pixels)"
+    )
+    logger.info(
+        f"  High-density sequences: {n_high} (×{oversample_factor:.1f}), "
+        f"low-density: {n_low} (×1.0)"
     )
     return weights
 
@@ -560,7 +551,8 @@ def make_dataloaders(
     stat_path:         Optional[str] = None,
     max_samples:       Optional[int] = None,
     train_val_split:   float = 0.7,
-    oversample_factor: float = 5.0,   # lightning-active sequences oversampled N×
+    oversample_factor:  float = 5.0,   # high-density sequences oversampled N×
+    density_percentile: float = 75.0,  # sequences above this LI density percentile are oversampled
 ):
     """
     Builds train and validation loaders from train_roots only.
@@ -641,7 +633,9 @@ def make_dataloaders(
 
     # Compute weights per sequence across all training parts
     all_weights = np.concatenate([
-        compute_li_sample_weights(ds, oversample_factor=oversample_factor)
+        compute_li_sample_weights(ds,
+                                   oversample_factor  = oversample_factor,
+                                   density_percentile = density_percentile)
         for ds in train_parts
     ])
     train_sampler = WeightedRandomSampler(
