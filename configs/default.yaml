@@ -68,9 +68,9 @@ sigma_max:  80.0
 # With 2 × RTX 5090 and batch_size=4 → effective batch = 8.
 # RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
 # depending on img_size and T_in/T_out.
-epochs:         550
+epochs:         999
 batch_size:     64
-lr:             1.0e-6
+lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
 ema_decay:      0.9999
