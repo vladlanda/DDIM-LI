@@ -345,7 +345,7 @@ def evaluate_epoch(
     n_members:    int   = 10,
     val_samples:  int   = -1,      # batches to evaluate; -1 = full val set
     cfg_scale:    float = 1.5,
-    li_event_threshold: float = 0.1,
+    li_event_threshold: float = 1.0/255.0,
     dt_min:       int   = 10,
 ) -> Dict[str, float]:
     """
@@ -432,8 +432,8 @@ def evaluate_epoch(
                     obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
                     ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
                                           for m in range(ens_t.shape[0])])
-                    pred_prob = (ens_phys > li_event_threshold).mean(axis=0)
-                    obs_bin   = (obs_phys > li_event_threshold).astype(float)
+                    pred_prob = (ens_phys >= li_event_threshold).mean(axis=0)
+                    obs_bin   = (obs_phys >= li_event_threshold).astype(float)
                     csi_per_step.append(
                         lightning_contingency(pred_prob, obs_bin)["csi"]
                     )
@@ -531,7 +531,7 @@ def fast_val_metrics(
     device:       "torch.device",
     channels:     List[str],
     val_samples:  int   = -1,      # batches to use; -1 = full val set
-    li_event_threshold: float = 0.1,
+    li_event_threshold: float = 1.0/255.0,
 ) -> Dict[str, float]:
     """
     Cheap validation metrics for use every training epoch.
@@ -660,7 +660,7 @@ def fast_val_metrics_ar(
     device:       "torch.device",
     channels:     List[str],
     val_samples:  int   = -1,
-    li_event_threshold: float = 0.1,
+    li_event_threshold: float = 1.0/255.0,
 ) -> Dict[str, float]:
     """
     Cheap validation metrics for the AR model — identical to fast_val_metrics
@@ -1593,9 +1593,9 @@ def run_test_evaluation(args):
                     obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
                     ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
                                           for m in range(ens_t.shape[0])])
-                    obs_bin   = (obs_phys > args.li_event_threshold).astype(np.float32)
+                    obs_bin   = (obs_phys >= args.li_event_threshold).astype(np.float32)
                     # Ensemble probability: fraction of members exceeding threshold
-                    pred_prob = (ens_phys > args.li_event_threshold).mean(axis=0).astype(np.float32)
+                    pred_prob = (ens_phys >= args.li_event_threshold).mean(axis=0).astype(np.float32)
 
                     # Full skill curve at all unique thresholds via sklearn
                     skill_by_step[t].append(
@@ -1837,8 +1837,11 @@ if __name__ == "__main__":
                         "before computing FSS (the only metric that still needs a "
                         "fixed threshold — all others sweep thresholds internally). "
                         "Each value gives one FSS curve on the spatial-scale plot.")
-    p.add_argument("--li_event_threshold", type=float, default=0.1,
-                   help="Normalised LI value above which a pixel is considered a lightning event. Used to binarise both the ground-truth LI field and each ensemble member before computing CSI/POD/FAR/FSS/Brier. The PR curve operates on the resulting ensemble probability, not on raw LI values, so no second threshold is needed there.")
+    p.add_argument("--li_event_threshold", type=float, default=1.0/255.0,
+                   help="LI binarisation threshold in physical space [0,1]. "
+                        "Default=1/255: any pixel with at least one recorded flash "
+                        "counts as lightning, consistent with the integer flash-count "
+                        "nature of the LI product (each pixel = flash count per 10-min window).")
     p.add_argument("--gpu",           type=int,   default=0)
     p.add_argument("--plot",          action="store_true",
                    help="Save full forecast PNGs for each test sequence")
