@@ -184,16 +184,17 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
 
     # Build datasets (all ranks do this; index-building is read-only)
     train_loader, val_loader, stats = make_dataloaders(
-        train_roots     = args.train_roots,
-        channel_list    = channels,
-        T_in            = args.T_in,
-        T_out           = args.T_out,
-        img_size        = tuple(args.img_size),
-        batch_size      = args.batch_size,        # per-GPU batch size
-        num_workers     = args.num_workers,
-        stat_path       = stat_path,
-        max_samples     = args.max_samples,
-        train_val_split = args.train_val_split,
+        train_roots       = args.train_roots,
+        channel_list      = channels,
+        T_in              = args.T_in,
+        T_out             = args.T_out,
+        img_size          = tuple(args.img_size),
+        batch_size        = args.batch_size,        # per-GPU batch size
+        num_workers       = args.num_workers,
+        stat_path         = stat_path,
+        max_samples       = args.max_samples,
+        train_val_split   = args.train_val_split,
+        oversample_factor = args.oversample_factor,
     )
 
     if not ddp_active() or world_size == 1:
@@ -441,6 +442,7 @@ def train(args):
                     cfg_drop_prob   = args.cfg_drop_prob,
                     spectral_weight = args.spectral_weight,
                     li_weight       = args.li_weight,
+                    li_weight_beta  = args.li_weight_beta,
                 )
 
             scaler.scale(loss).backward()

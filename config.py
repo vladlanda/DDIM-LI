@@ -80,7 +80,11 @@ def add_arguments(parser: argparse.ArgumentParser):
                         help="DataLoader workers PER GPU.")
     parser.add_argument("--cfg_drop_prob",   type=float, default=0.15)
     parser.add_argument("--spectral_weight", type=float, default=0.1)
-    parser.add_argument("--li_weight",       type=float, default=3.0)
+    parser.add_argument("--li_weight",        type=float, default=30.0)
+    parser.add_argument("--li_weight_beta",   type=float, default=0.9999,
+                        help="Beta for Cui et al. 2019 effective number formula.")
+    parser.add_argument("--oversample_factor", type=float, default=5.0,
+                        help="Lightning-active sequences oversampled N× (WeightedRandomSampler).")
     parser.add_argument("--n_members",       type=int,   default=10)
     parser.add_argument("--cfg_scale",       type=float, default=1.5)
 

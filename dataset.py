@@ -405,6 +405,20 @@ class METSATDataset(Dataset):
             context         = context[:, :, :, ::-1].copy()
             target_residual = target_residual[:, :, :, ::-1].copy()
 
+        # LI density: fraction of non-zero LI pixels across all target frames.
+        # Used for dynamic li_weight during training (Cui et al. 2019).
+        li_idx = self.channel_list.index("li") if "li" in self.channel_list else None
+        if li_idx is not None:
+            # target_abs in normalised space: zero cbrt(LI) normalised = -mean/std
+            # but we want physical > 0, so use target_abs before residual:
+            li_abs    = target_abs[:, li_idx]          # (T_out, H, W) normalised abs
+            li_phys   = li_abs * self._norm_std[li_idx] + self._norm_mean[li_idx]
+            if self._cbrt_mask[li_idx]:
+                li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
+            li_density = float((li_phys > 0).mean())  # fraction of non-zero pixels
+        else:
+            li_density = 0.0
+
         return {
             "context":    torch.from_numpy(context),
             "target":     torch.from_numpy(target_residual),
@@ -412,6 +426,7 @@ class METSATDataset(Dataset):
             "ctx_mask":   torch.from_numpy(masks[:self.T_in]),
             "tgt_mask":   torch.from_numpy(masks[self.T_in:]),
             "last_ctx":   torch.from_numpy(last_ctx[0]),
+            "li_density": torch.tensor(li_density, dtype=torch.float32),
         }
 
 
@@ -437,17 +452,117 @@ class MultiRegionDataset(Dataset):
 # DataModule helpers
 # -------------------------------------------------------------------
 
+def compute_li_sample_weights(
+    dataset,
+    oversample_factor: float = 5.0,
+    li_threshold_phys: float = 0.0,
+) -> np.ndarray:
+    """
+    Compute per-sequence sampling weights for WeightedRandomSampler.
+
+    A sequence is "lightning-active" if at least one target frame contains
+    at least one pixel with physical LI > li_threshold_phys (default: any
+    non-zero pixel, consistent with the > 0 binarisation used in evaluation).
+
+    LI pixels are loaded and decoded exactly as in _load_frame — cbrt
+    transform then z-score normalisation — then inverted back to physical
+    space before thresholding. This is the same pipeline used during
+    training and evaluation, so the activity label is consistent.
+
+    Active sequences receive weight `oversample_factor`; inactive receive
+    weight 1.0. This implements the stratified sampling approach of
+    Lin et al. (2017, Focal Loss) applied at the sequence level.
+
+    Args:
+        dataset           : METSATDataset instance with built index and stats
+        oversample_factor : multiplier for active sequences (default 5.0)
+        li_threshold_phys : physical LI threshold for "lightning present"
+                            (default 0.0 = any non-zero pixel)
+
+    Returns:
+        np.ndarray of shape (len(dataset),) with per-sequence weights
+    """
+    ch_list = getattr(dataset, "channel_list", None)
+    if ch_list is None or "li" not in ch_list:
+        logger.warning("compute_li_sample_weights: no LI channel, returning uniform weights")
+        return np.ones(len(dataset), dtype=np.float64)
+
+    li_idx    = ch_list.index("li")
+    li_mean   = dataset._norm_mean[li_idx]
+    li_std    = dataset._norm_std[li_idx]
+    is_cbrt   = dataset._cbrt_mask[li_idx]
+    h, w      = dataset.img_size
+
+    weights    = np.ones(len(dataset), dtype=np.float64)
+    n_active   = 0
+    n_inactive = 0
+
+    for i, seq_times in enumerate(tqdm(
+        dataset.valid_sequences,
+        desc  = "  Computing LI sample weights",
+        unit  = "seq",
+        leave = False,
+        dynamic_ncols = True,
+    )):
+        target_times = seq_times[dataset.T_in:]   # T_out target timestamps
+        is_active    = False
+
+        for t in target_times:
+            if t not in dataset.index:
+                continue
+            ch_files = dataset.index[t]
+            if "li" not in ch_files:
+                continue
+
+            # Load LI frame — same pipeline as _load_frame
+            try:
+                img = Image.open(ch_files["li"]).convert("L")
+                if img.size != (w, h):
+                    img = img.resize((w, h), Image.BILINEAR)
+                arr = np.frombuffer(img.tobytes(), dtype=np.uint8).reshape(h, w)
+                li_raw = arr.astype(np.float32) / 255.0
+            except Exception:
+                continue
+
+            # Invert normalisation to physical space
+            if is_cbrt:
+                li_norm  = np.cbrt(li_raw)
+            else:
+                li_norm  = li_raw
+            li_phys = li_norm * li_std + li_mean
+            if is_cbrt:
+                li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
+
+            if (li_phys > li_threshold_phys).any():
+                is_active = True
+                break   # one active frame is sufficient
+
+        if is_active:
+            weights[i] = oversample_factor
+            n_active  += 1
+        else:
+            n_inactive += 1
+
+    logger.info(
+        f"  LI sample weights: {n_active} active (×{oversample_factor:.1f}), "
+        f"{n_inactive} inactive (×1.0)  —  "
+        f"active fraction: {n_active / max(len(dataset), 1):.3f}"
+    )
+    return weights
+
+
 def make_dataloaders(
-    train_roots:     List[str],
-    channel_list:    List[str],
-    T_in:            int   = 6,
-    T_out:           int   = 36,
-    img_size:        Tuple[int, int] = (256, 256),
-    batch_size:      int   = 4,
-    num_workers:     int   = 4,
-    stat_path:       Optional[str] = None,
-    max_samples:     Optional[int] = None,
-    train_val_split: float = 0.7,
+    train_roots:       List[str],
+    channel_list:      List[str],
+    T_in:              int   = 6,
+    T_out:             int   = 36,
+    img_size:          Tuple[int, int] = (256, 256),
+    batch_size:        int   = 4,
+    num_workers:       int   = 4,
+    stat_path:         Optional[str] = None,
+    max_samples:       Optional[int] = None,
+    train_val_split:   float = 0.7,
+    oversample_factor: float = 5.0,   # lightning-active sequences oversampled N×
 ):
     """
     Builds train and validation loaders from train_roots only.
@@ -521,8 +636,24 @@ def make_dataloaders(
         f"val: {len(val_combined)} sequences"
     )
 
+    # Stratified sequence sampling: oversample lightning-active sequences.
+    # Uses WeightedRandomSampler which is compatible with DDP (train.py
+    # replaces it with DistributedSampler when running multi-GPU).
+    from torch.utils.data import WeightedRandomSampler
+
+    # Compute weights per sequence across all training parts
+    all_weights = np.concatenate([
+        compute_li_sample_weights(ds, oversample_factor=oversample_factor)
+        for ds in train_parts
+    ])
+    train_sampler = WeightedRandomSampler(
+        weights     = torch.from_numpy(all_weights).double(),
+        num_samples = len(train_combined),
+        replacement = True,
+    )
+
     train_loader = DataLoader(
-        train_combined, batch_size=batch_size, shuffle=True,
+        train_combined, batch_size=batch_size, sampler=train_sampler,
         num_workers=num_workers, pin_memory=True, drop_last=True,
     )
     val_loader = DataLoader(

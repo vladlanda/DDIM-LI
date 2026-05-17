@@ -80,7 +80,13 @@ num_workers:    4          # per GPU; total CPU workers = num_workers × num_gpu
 # Loss weights
 cfg_drop_prob:    0.15     # probability of nulling context (for CFG training)
 spectral_weight:  0.1      # FFT magnitude loss weight
-li_weight:        30.0      # upweight lightning channel in MSE
+li_weight:        30.0     # base upweight for LI channel (dynamic per-sample scaling applied on top)
+li_weight_beta:   0.9999   # Cui et al. 2019 beta — controls dynamic weight smoothness
+                           # 0.9999 recommended; lower = more aggressive rare-event focus
+
+# Stratified sequence sampling
+oversample_factor: 5.0     # lightning-active sequences oversampled N× via WeightedRandomSampler
+                           # 5.0 means active sequences drawn 5× more often than inactive ones
  
 # ----------------------------------------------------------
 # Validation & logging

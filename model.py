@@ -501,22 +501,86 @@ def spectral_loss(pred: torch.Tensor, target: torch.Tensor, weight: float = 0.1)
     return weight * loss
 
 
+def effective_li_weight(
+    li_density: torch.Tensor,   # (B,) fraction of non-zero LI pixels in [0, 1]
+    base_weight: float = 30.0,
+    beta: float = 0.9999,
+    min_weight: float = 1.0,
+    max_weight: float = 200.0,
+) -> torch.Tensor:
+    """
+    Per-sample dynamic LI weight using the Effective Number of Samples
+    formula from Cui et al. (2019), "Class-Balanced Loss Based on
+    Effective Number of Samples", CVPR 2019.
+
+    For a class with n samples, effective number E_n = (1 - β^n) / (1 - β).
+    We treat li_density * H * W as the effective pixel count and normalise
+    so that a reference density of 0.05 (5% LI pixels) gives base_weight.
+
+    Properties:
+      - Sparse sequences (density → 0) get weight → max_weight
+      - Dense sequences  (density → 1) get weight → min_weight
+      - Sequences with zero LI density get weight = 1.0 (background)
+        because the model should still learn to predict zero residual there
+      - Smooth, no blow-up (unlike pure inverse frequency)
+
+    Args:
+        li_density : (B,) tensor, fraction of LI pixels per sample
+        base_weight: weight assigned at reference_density=0.05
+        beta       : smoothing factor (0.9999 recommended, Cui et al.)
+        min_weight : floor — dense sequences still upweighted vs non-LI channels
+        max_weight : ceiling — prevents extreme gradients on tiny events
+
+    Returns:
+        (B,) tensor of per-sample li_weight values
+    """
+    # Approximate pixel count from density (H*W implicit in density)
+    # Use density directly as the effective count proxy
+    eps = 1e-6
+    n   = li_density.clamp(min=eps)
+
+    # Effective number formula
+    E_n = (1.0 - beta ** n) / (1.0 - beta)
+
+    # Reference: E_n at density=0.05
+    E_ref = (1.0 - beta ** 0.05) / (1.0 - beta)
+
+    # Scale so reference density → base_weight
+    weight = base_weight * (E_ref / E_n)
+
+    # Zero-density sequences: no LI in frame, use background weight of 1.0
+    # The model should still learn to predict zero residual here
+    weight = torch.where(li_density < eps, torch.ones_like(weight), weight)
+
+    return weight.clamp(min_weight, max_weight)
+
+
 def channel_weighted_mse(
     pred: torch.Tensor,
     target: torch.Tensor,
     ch_mask: torch.Tensor,
-    li_weight: float = 3.0,
+    li_weight: Union[float, torch.Tensor] = 3.0,
     li_idx: int = 1,        # LI is channel index 1  (ir=0, li=1, ch0=2, ...)
 ) -> torch.Tensor:
     """
     MSE with:
       - masking of absent channels
       - upweighting LI channel (sparse but critical)
+
+    li_weight can be:
+      - float : same weight for all samples in the batch (original behaviour)
+      - (B,) Tensor : per-sample weight (used with dynamic li_weight)
+
     pred, target: (B, C, H, W)
     ch_mask: (B, C)
     """
-    weights = torch.ones_like(ch_mask)
-    weights[:, li_idx] = li_weight
+    weights = torch.ones_like(ch_mask)   # (B, C)
+
+    if isinstance(li_weight, torch.Tensor):
+        # Per-sample: (B,) → broadcast to (B, 1) for channel assignment
+        weights[:, li_idx] = li_weight
+    else:
+        weights[:, li_idx] = li_weight
 
     per_pixel  = (pred - target) ** 2                    # (B, C, H, W)
     mask_4d    = ch_mask[:, :, None, None]
@@ -534,6 +598,7 @@ def edm_training_loss(
     cfg_drop_prob: float = 0.15,
     spectral_weight: float = 0.1,
     li_weight: float = 3.0,
+    li_weight_beta: float = 0.9999,   # Cui et al. 2019 beta for effective number
 ) -> torch.Tensor:
     """
     Full EDM training loss with:
@@ -575,7 +640,19 @@ def edm_training_loss(
     # Loss weight λ(σ)
     lw = schedule.edm_loss_weight(sigma)[:, None, None, None]
 
-    mse  = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, li_weight)
+    # Dynamic per-sample li_weight using Cui et al. (2019) effective number formula.
+    # li_density is (B,) from the dataset; absent → use scalar base weight.
+    if "li_density" in batch:
+        li_density = batch["li_density"].to(device)   # (B,)
+        dyn_weight = effective_li_weight(
+            li_density,
+            base_weight = li_weight,
+            beta        = li_weight_beta,
+        )
+    else:
+        dyn_weight = li_weight   # fallback: scalar (original behaviour)
+
+    mse  = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, dyn_weight)
     # spec = spectral_loss(pred, y, spectral_weight)
     # return mse + spec
     return mse
