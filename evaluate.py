@@ -1819,6 +1819,26 @@ def run_test_evaluation(args):
 
 # ===================================================================
 # Entry point
+# S_churn=0 — fully deterministic (your current baseline)
+# python evaluate.py \
+#     --config configs/default.yaml \
+#     --checkpoint outputs/pred_1h_input_3h_dim_64/best.pt \
+#     --S_churn 0 --n_members 32 \
+#     --output_dir outputs/eval_schurn0
+
+# S_churn=40 — moderate stochasticity ------------------------
+# python evaluate.py \
+#     --config configs/default.yaml \
+#     --checkpoint outputs/pred_1h_input_3h_dim_64/best.pt \
+#     --S_churn 40 --n_members 32 \
+#     --output_dir outputs/eval_schurn40
+
+# # S_churn=80 — high stochasticity  ---------------------------
+# python evaluate.py \
+#     --config configs/default.yaml \
+#     --checkpoint outputs/pred_1h_input_3h_dim_64/best.pt \
+#     --S_churn 80 --n_members 32 \
+#     --output_dir outputs/eval_schurn80
 # ===================================================================
 if __name__ == "__main__":
     import argparse
@@ -1828,7 +1848,8 @@ if __name__ == "__main__":
     )
     p.add_argument("--checkpoint",    required=True,
                    help="Path to best.pt or latest.pt")
-    p.add_argument("--test_roots",    required=True, nargs="+",
+    p.add_argument("--test_roots",    required=True, nargs="+", 
+                   default='/home/vladlanda/Workplace/LI-DATASETS/inference/central_africa_4',
                    help="One or more dataset root directories for the test set")
     p.add_argument("--output_dir",    default="outputs/evaluation",
                    help="Directory to write metrics, CSV and plots")
