@@ -706,192 +706,227 @@ def make_test_loader(
 
 
 # ===================================================================
-# CLI: visualise a single sequence  (python dataset.py --help)
-# ===================================================================
-
-# ===================================================================
-# CLI: visualise a single sequence  (python dataset.py --help)
+# CLI: visualise all DataLoader outputs for one sequence
 #
-# Plot sequence 0 (default) — opens matplotlib window
-#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
-#
-# Plot sequence 42 and also save to PNG
-#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --idx 42 --out seq42.png
-#
-# Different channels / longer horizon
-#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --idx 10 --channels ir li ch1 ch2 --T_in 6 --T_out 36 --out full_6h.png
-#
-# Normalised space instead of physical
-#   python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --no_physical
-#
+# python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
+# python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --idx 42
+# python dataset.py /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4 --out seq.png
 # ===================================================================
 
 if __name__ == "__main__":
     import argparse
     import matplotlib
     import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
 
     p = argparse.ArgumentParser(
-        description="Plot T_in context + T_out target frames for one sequence."
+        description="Visualise all DataLoader outputs for one sequence."
     )
-    p.add_argument("root",          help="Dataset root directory")
-    p.add_argument("--idx",         type=int, default=0,
-                   help="Sequence index to visualise (default: 0)")
-    p.add_argument("--channels",    nargs="+", default=["ir", "li", "ch1", "ch2"],
-                   help="Channels to load")
-    p.add_argument("--T_in",        type=int, default=6)
-    p.add_argument("--T_out",       type=int, default=6)
-    p.add_argument("--img_size",    nargs=2, type=int, default=[256, 256])
-    p.add_argument("--stat_path",   default=None,
-                   help="Path to channel_stats.json (computed on-the-fly if absent)")
-    p.add_argument("--out",         default=None,
-                   help="Also save to this PNG path (optional)")
-    p.add_argument("--physical",    action="store_true", default=True,
-                   help="Denormalise to physical units before plotting (default: true)")
-    p.add_argument("--no_physical", dest="physical", action="store_false",
-                   help="Plot in normalised space")
+    p.add_argument("root",        help="Dataset root directory")
+    p.add_argument("--idx",       type=int,   default=0)
+    p.add_argument("--channels",  nargs="+",  default=["ir", "li", "ch0", "ch1"])
+    p.add_argument("--T_in",      type=int,   default=18)
+    p.add_argument("--T_out",     type=int,   default=6)
+    p.add_argument("--img_size",  nargs=2,    type=int, default=[64, 64])
+    p.add_argument("--stat_path", default=None)
+    p.add_argument("--out",       default=None, help="Also save to PNG")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
-    print(args)
-    # ---- Build dataset ------------------------------------------------
-    # stat_path is optional — if None, stats are computed on-the-fly and not cached.
-    # Pass --stat_path to reuse pre-computed stats and skip the computation.
-    stat_path = args.stat_path  # may be None
+
     ds = METSATDataset(
         root         = args.root,
         channel_list = args.channels,
         T_in         = args.T_in,
         T_out        = args.T_out,
         img_size     = tuple(args.img_size),
-        stat_path    = stat_path,
+        stat_path    = args.stat_path,
         augment      = False,
     )
-
-    n = len(ds)
-    if n == 0:
+    if len(ds) == 0:
         raise RuntimeError(f"No valid sequences found in {args.root}")
-    idx = args.idx % n
-    logger.info(f"Dataset: {n} sequences  |  plotting index {idx}")
 
-    sample   = ds[idx]
-    stats    = ds.stats
-    channels = args.channels
-    C        = len(channels)
+    idx    = args.idx % len(ds)
+    sample = ds[idx]
+    stats  = ds.stats
+    C      = len(args.channels)
 
-    # ---- Reconstruct absolute frames ----------------------------------
-    # context : (T_in,  C, H, W)  normalised absolute
-    # target  : (T_out, C, H, W)  normalised residuals  → add last_ctx
-    ctx_norm = sample["context"].numpy()                   # (T_in, C, H, W)
-    tgt_res  = sample["target"].numpy()                    # (T_out, C, H, W)
-    last_ctx = sample["last_ctx"].numpy()                  # (C, H, W)
-    tgt_norm = tgt_res + last_ctx[None]                    # (T_out, C, H, W) absolute
+    # ── Unpack all DataLoader outputs ───────────────────────────────────
+    ctx_norm  = sample["context"].numpy()    # (T_in,  C, H, W) normalised absolute
+    tgt_res   = sample["target"].numpy()     # (T_out, C, H, W) normalised RESIDUALS
+    last_ctx  = sample["last_ctx"].numpy()   # (C, H, W)
+    ctx_mask  = sample["ctx_mask"].numpy()   # (T_in,  C)  1=present 0=missing
+    tgt_mask  = sample["tgt_mask"].numpy()   # (T_out, C)
+    lead_times = sample["lead_times"].numpy() # (T_out,)  [1,2,...,T_out]
+    li_density = float(sample["li_density"])
 
-    all_frames_norm = np.concatenate([ctx_norm, tgt_norm], axis=0)  # (T_in+T_out, C, H, W)
-    T_total = args.T_in + args.T_out
+    # Reconstruct absolute target frames from residuals
+    tgt_abs  = tgt_res + last_ctx[None]      # (T_out, C, H, W)
 
-    # ---- Optionally denormalise to physical units ----------------------
-    if args.physical:
-        all_frames = np.zeros_like(all_frames_norm)
-        for ci, ch in enumerate(channels):
-            if ch in stats:
-                all_frames[:, ci] = denormalize(all_frames_norm[:, ci], stats, ch)
-            else:
-                all_frames[:, ci] = all_frames_norm[:, ci]
-        unit_suffix = " (physical)"
-    else:
-        all_frames  = all_frames_norm
-        unit_suffix = " (normalised)"
+    # Denormalise to physical units
+    def to_phys(arr_nc, ch):
+        """arr_nc: (N, H, W) normalised → physical"""
+        x = arr_nc * stats[ch]["std"] + stats[ch]["mean"]
+        if stats[ch].get("transform") == "cbrt":
+            x = np.power(np.clip(x, 0, None), 3)
+        return x
 
-    # ---- Plot ----------------------------------------------------------
-    # Layout: C rows × T_total columns
-    # Each cell is one channel at one timestep.
-    # Context frames have a light-blue background; target frames white.
-    cell_w, cell_h = 1.6, 1.8
-    fig_w = T_total * cell_w
-    fig_h = C * cell_h + 0.6          # extra for suptitle
+    ctx_phys = np.stack([to_phys(ctx_norm[:, ci], ch)
+                         for ci, ch in enumerate(args.channels)], axis=1)
+    tgt_phys = np.stack([to_phys(tgt_abs[:, ci],  ch)
+                         for ci, ch in enumerate(args.channels)], axis=1)
+    res_phys = np.stack([to_phys(tgt_res[:, ci],  ch)
+                         for ci, ch in enumerate(args.channels)], axis=1)
 
-    fig, axes = plt.subplots(
-        C, T_total,
-        figsize     = (fig_w, fig_h),
-        squeeze     = False,
-        gridspec_kw = {"wspace": 0.03, "hspace": 0.08},
-    )
-    fig.patch.set_facecolor("white")
+    cmaps = ["hot" if ch == "li" else "gray" for ch in args.channels]
 
-    # Choose colourmap per channel: grey for IR/cloud, hot for LI
-    cmaps = []
-    for ch in channels:
-        cmaps.append("hot" if ch == "li" else "gray")
+    # ── Figure layout ───────────────────────────────────────────────────
+    # Section 1: context frames          C rows × T_in cols
+    # Section 2: target absolute frames  C rows × T_out cols
+    # Section 3: target residuals        C rows × T_out cols
+    # Section 4: masks                   2 rows (ctx/tgt) × C cols
+    # Section 5: scalars bar             li_density + lead_times
 
-    font_t = max(4, min(7, int(100 / T_total)))
+    T_in  = args.T_in
+    T_out = args.T_out
+    cw, rh = 1.3, 1.5   # cell width / row height inches
 
-    for ci, (ch, cmap) in enumerate(zip(channels, cmaps)):
-        # Compute consistent vmin/vmax across all timesteps for this channel
-        ch_data = all_frames[:, ci]                        # (T_total, H, W)
-        vmin, vmax = float(ch_data.min()), float(ch_data.max())
-        if vmin == vmax:
-            vmax = vmin + 1e-6
+    fig = plt.figure(figsize=((T_in + T_out * 2 + 1) * cw,
+                               (C * 3 + 3) * rh * 0.6),
+                     facecolor="white")
 
-        for t in range(T_total):
-            ax = axes[ci, t]
-            ax.imshow(ch_data[t], cmap=cmap, vmin=vmin, vmax=vmax,
-                      interpolation="nearest")
-            ax.axis("off")
+    outer = gridspec.GridSpec(5, 1, figure=fig,
+                              hspace=0.55,
+                              height_ratios=[C, C, C, 2, 1])
 
-            # Column header: timestep label on top row only
-            if ci == 0:
-                if t < args.T_in:
-                    label = f"ctx-{args.T_in - t}"
-                    bg    = "#dce8f5"
-                else:
-                    step_min = (t - args.T_in + 1) * 10
-                    label = f"+{step_min}m"
-                    bg    = "white"
-                ax.set_title(label, fontsize=font_t, pad=2,
-                             backgroundcolor=bg, color="black")
-
-            # Row label: channel name on leftmost column only
-            if t == 0:
-                ax.set_ylabel(ch + unit_suffix,
-                              fontsize=font_t + 1, rotation=90,
-                              labelpad=3, color="black", va="center")
-                ax.yaxis.set_label_position("left")
-                ax.axis("on")
-                ax.tick_params(left=False, bottom=False,
-                               labelleft=False, labelbottom=False)
-                for spine in ax.spines.values():
-                    spine.set_visible(False)
-
-    # Divider line between context and target
-    # Draw as figure-level line at the boundary column
-    boundary_x = args.T_in / T_total
-    fig.add_artist(
-        plt.Line2D(
-            [boundary_x, boundary_x], [0.04, 0.96],
-            transform = fig.transFigure,
-            color     = "#e05050",
-            linewidth = 1.2,
-            linestyle = "--",
+    def section_grid(outer_idx, ncols, nrows=C):
+        return gridspec.GridSpecFromSubplotSpec(
+            nrows, ncols,
+            subplot_spec=outer[outer_idx],
+            wspace=0.04, hspace=0.08
         )
-    )
-    fig.text(boundary_x + 0.005, 0.97, "▶ Forecast",
-             ha="left", va="top", fontsize=8, color="#e05050",
-             transform=fig.transFigure)
-    fig.text(boundary_x - 0.005, 0.97, "Context ◀",
-             ha="right", va="top", fontsize=8, color="#3266ad",
-             transform=fig.transFigure)
 
-    plt.suptitle(
-        f"Sequence {idx}/{n-1}  |  {args.T_in} context + {args.T_out} target frames"
-        f"  |  root: {os.path.basename(args.root.rstrip(os.sep))}",
-        fontsize=9, y=1.002, color="black",
+    def section_title(outer_idx, title, color):
+        ax = fig.add_subplot(outer[outer_idx])
+        ax.set_visible(False)
+        fig.text(
+            ax.get_position().x0, ax.get_position().y1 + 0.005,
+            title, fontsize=9, fontweight="bold", color=color,
+            transform=fig.transFigure, va="bottom"
+        )
+
+    ft = 6   # font size for tick labels / titles
+
+    # ── Section 1: context ──────────────────────────────────────────────
+    section_title(0, f"① context  (T_in={T_in})  shape: ({T_in}, {C}, H, W)  "
+                     f"normalised absolute", "#1a5ea8")
+    gs1 = section_grid(0, T_in)
+    for ci, (ch, cmap) in enumerate(zip(args.channels, cmaps)):
+        d = ctx_phys[:, ci]
+        vmin, vmax = d.min(), d.max()
+        if vmin == vmax: vmax += 1e-6
+        for t in range(T_in):
+            ax = fig.add_subplot(gs1[ci, t])
+            ax.imshow(d[t], cmap=cmap, vmin=vmin, vmax=vmax,
+                      interpolation="nearest")
+            ax.set_xticks([]); ax.set_yticks([])
+            if t == 0:
+                ax.set_ylabel(ch, fontsize=ft, rotation=0,
+                              labelpad=20, va="center")
+            if ci == 0:
+                ax.set_title(f"ctx-{T_in-t}", fontsize=ft,
+                             pad=2, backgroundcolor="#dce8f5")
+
+    # ── Section 2: target absolute ──────────────────────────────────────
+    section_title(1, f"② target absolute  (T_out={T_out})  shape: ({T_out}, {C}, H, W)  "
+                     f"= residual + last_ctx", "#1a7a3c")
+    gs2 = section_grid(1, T_out)
+    for ci, (ch, cmap) in enumerate(zip(args.channels, cmaps)):
+        d = tgt_phys[:, ci]
+        vmin, vmax = d.min(), d.max()
+        if vmin == vmax: vmax += 1e-6
+        for t in range(T_out):
+            ax = fig.add_subplot(gs2[ci, t])
+            ax.imshow(d[t], cmap=cmap, vmin=vmin, vmax=vmax,
+                      interpolation="nearest")
+            ax.set_xticks([]); ax.set_yticks([])
+            if t == 0:
+                ax.set_ylabel(ch, fontsize=ft, rotation=0,
+                              labelpad=20, va="center")
+            if ci == 0:
+                ax.set_title(f"+{int(lead_times[t]*10)}m",
+                             fontsize=ft, pad=2,
+                             backgroundcolor="#d4edda")
+
+    # ── Section 3: target residuals ─────────────────────────────────────
+    section_title(2, f"③ target residuals  (T_out={T_out})  shape: ({T_out}, {C}, H, W)  "
+                     f"= target_abs - last_ctx  ← what the model predicts", "#8b3a00")
+    gs3 = section_grid(2, T_out)
+    for ci, (ch, cmap) in enumerate(zip(args.channels, cmaps)):
+        d = res_phys[:, ci]
+        # Symmetric colormap for residuals
+        absmax = max(abs(d.min()), abs(d.max()), 1e-6)
+        for t in range(T_out):
+            ax = fig.add_subplot(gs3[ci, t])
+            ax.imshow(d[t], cmap="RdBu_r", vmin=-absmax, vmax=absmax,
+                      interpolation="nearest")
+            ax.set_xticks([]); ax.set_yticks([])
+            if t == 0:
+                ax.set_ylabel(ch, fontsize=ft, rotation=0,
+                              labelpad=20, va="center")
+            if ci == 0:
+                ax.set_title(f"+{int(lead_times[t]*10)}m",
+                             fontsize=ft, pad=2,
+                             backgroundcolor="#fde8d0")
+
+    # ── Section 4: masks ────────────────────────────────────────────────
+    gs4 = gridspec.GridSpecFromSubplotSpec(
+        2, C, subplot_spec=outer[3], wspace=0.3, hspace=0.4
+    )
+    mask_labels = [
+        (ctx_mask.T,  f"ctx_mask  ({T_in}, {C})"),
+        (tgt_mask.T,  f"tgt_mask  ({T_out}, {C})")
+    ]
+    for row, (mask_data, title) in enumerate(mask_labels):
+        ax = fig.add_subplot(gs4[row, :])
+        ax.imshow(mask_data, cmap="Blues", vmin=0, vmax=1,
+                  aspect="auto", interpolation="nearest")
+        ax.set_title(title, fontsize=ft)
+        ax.set_yticks(range(C))
+        ax.set_yticklabels(args.channels, fontsize=ft)
+        ax.set_xlabel("timestep", fontsize=ft)
+        ax.tick_params(labelsize=ft)
+
+    # ── Section 5: scalar outputs ────────────────────────────────────────
+    ax5 = fig.add_subplot(outer[4])
+    ax5.axis("off")
+
+    ld_pct  = f"{li_density*100:.2f}"
+    lt_list = lead_times.astype(int).tolist()
+    lt_min  = (lead_times * 10).astype(int).tolist()
+    lc_shp  = list(last_ctx.shape)
+    info = (
+        f"li_density = {li_density:.4f}  ({ld_pct}% of LI pixels > 0 across target frames)\n"
+        f"lead_times = {lt_list}  (step indices -> x10 min = {lt_min} min ahead)\n"
+        f"last_ctx shape = {lc_shp}  (last context frame, added back to residuals at eval)"
+    )
+    ax5.text(0.01, 0.85, info, transform=ax5.transAxes,
+             fontsize=ft+1, va="top", family="monospace",
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#f5f5f5",
+                       edgecolor="#cccccc", linewidth=0.8))
+
+    fig.suptitle(
+        f"DataLoader outputs — sequence {idx}/{len(ds)-1}  |  "
+        f"{args.root.rstrip('/').split('/')[-1]}",
+        fontsize=10, fontweight="bold", y=1.002
     )
 
     if args.out:
-        plt.savefig(args.out, dpi=120, bbox_inches="tight", facecolor="white")
+        plt.savefig(args.out, dpi=130, bbox_inches="tight",
+                    facecolor="white")
         logger.info(f"Saved → {args.out}")
+
     plt.tight_layout()
     plt.show()
     plt.close(fig)
