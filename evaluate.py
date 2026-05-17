@@ -1563,8 +1563,9 @@ def run_test_evaluation(args):
             model, context, ch_mask, device,
             n_members = args.n_members,
             cfg_scale = args.cfg_scale,
-            S_churn=args.S_churn,       
-            num_steps=args.num_steps,   
+            S_churn   = args.S_churn,
+            S_noise   = args.S_noise,
+            num_steps = args.num_steps,
         )  # (B, M, T_out, C, H, W) residuals
 
         # Reconstruct absolute normalised frames before all metric computation
@@ -1859,10 +1860,12 @@ if __name__ == "__main__":
                    help="Pixel size in km — used to label FSS x-axis in km")
     
     p.add_argument("--S_churn",   type=float, default=40.0,
-               help="EDM stochastic churn. Higher = more ensemble diversity. "
-                    "0 = deterministic DDIM. Try 20, 40, 80.")
+                   help="EDM stochastic churn. Higher = more ensemble diversity. "
+                        "0 = deterministic DDIM. Try 0, 20, 40, 80.")
+    p.add_argument("--S_noise",   type=float, default=1.003,
+                   help="Noise inflation factor for churn step (default: 1.003).")
     p.add_argument("--num_steps", type=int,   default=20,
-                help="Denoising steps per ensemble member.")
+                   help="Denoising steps per ensemble member.")
     
     args = p.parse_args()
     run_test_evaluation(args)
