@@ -455,7 +455,7 @@ class MultiRegionDataset(Dataset):
 def compute_li_sample_weights(
     dataset,
     oversample_factor: float = 5.0,
-    li_threshold_phys: float = 0.0,
+    li_threshold_phys: float = 2.0/255.0,   # avoids JPEG artefacts
 ) -> np.ndarray:
     """
     Compute per-sequence sampling weights for WeightedRandomSampler.
@@ -514,7 +514,10 @@ def compute_li_sample_weights(
             if "li" not in ch_files:
                 continue
 
-            # Load LI frame — same pipeline as _load_frame
+            # Load LI frame as raw physical values [0, 1]
+            # li_raw = pixel/255 is already in physical space — no inversion needed.
+            # The normalisation pipeline (cbrt → z-score) is applied at training
+            # time; here we want the raw physical value to threshold against.
             try:
                 img = Image.open(ch_files["li"]).convert("L")
                 if img.size != (w, h):
@@ -524,16 +527,11 @@ def compute_li_sample_weights(
             except Exception:
                 continue
 
-            # Invert normalisation to physical space
-            if is_cbrt:
-                li_norm  = np.cbrt(li_raw)
-            else:
-                li_norm  = li_raw
-            li_phys = li_norm * li_std + li_mean
-            if is_cbrt:
-                li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-
-            if (li_phys > li_threshold_phys).any():
+            # Threshold in physical space.
+            # Use li_threshold_phys = 2/255 ≈ 0.008 rather than 0.0 to avoid
+            # counting JPEG compression artefacts (single-pixel values of 1/255)
+            # as lightning events.
+            if (li_raw > li_threshold_phys).any():
                 is_active = True
                 break   # one active frame is sufficient
 
