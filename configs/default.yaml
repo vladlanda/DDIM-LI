@@ -53,7 +53,7 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         300
+epochs:         500
 batch_size:     32
 lr:             1.0e-4
 weight_decay:   1.0e-4
@@ -68,17 +68,17 @@ num_workers:    4
 cfg_drop_prob:   0.15
 
 # Channel weighting — Cui et al. 2019 effective number formula
-li_weight:       30.0
+li_weight:       20.0
 li_weight_beta:  0.9999
 
 # Asymmetric FP/FN loss — Gao et al. 2022
 # Reduces FAR by penalising false positives less than false negatives early in training
 asym_weight:     1.0
-asym_alpha:      0.3    # FP penalised at 30% of FN cost; anneal toward 1.0 manually
+asym_alpha:      0.1    # FP penalised at 10% of FN cost; anneal toward 1.0 manually
 
 # Neighbourhood spatial loss — Zhang et al. 2023
 # Penalises spatial displacement; directly improves FSS
-nbr_weight:      0.5
+nbr_weight:      0.3
 nbr_scales:      [5, 11]   # kernel sizes in pixels (≈20km and ≈44km at 4km/px)
 
 # Spectral loss — applied to IR/cloud channels only (not LI)
@@ -96,11 +96,11 @@ binary_li_ctx:   true
 # Validation & logging
 # ----------------------------------------------------------
 slow_val:     false
-val_every:    10
+val_every:    5
 val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nonelbo_1h_3h_ctx_ch64
-resume:          false
+output_dir:      outputs/nonelbo_v1
+resume:          false   # fresh start
 wandb_project:   "DDIM-LI"

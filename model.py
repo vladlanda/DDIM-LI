@@ -490,11 +490,11 @@ def channel_weighted_mse(
 
 
 def asymmetric_li_loss(
-    pred:      torch.Tensor,
-    target:    torch.Tensor,
-    alpha:     float = 0.3,
-    li_idx:    int   = 1,
-    threshold: float = 1.0 / 255.0,
+    pred:           torch.Tensor,
+    target:         torch.Tensor,
+    alpha:          float = 0.1,
+    li_idx:         int   = 1,
+    norm_threshold: float = 0.06,
 ) -> torch.Tensor:
     """
     Asymmetric pixel loss for the LI channel.
@@ -510,22 +510,32 @@ def asymmetric_li_loss(
     Following Gao et al. 2022 (EarthFormer) applied to convective nowcasting.
 
     Args:
-        pred, target : (B, C, H, W) — denoised prediction and clean target
-        alpha        : FP cost relative to FN. alpha=0.3 → FP penalised
-                       at 30% of FN cost. Annealed to 1.0 during training.
-        li_idx       : index of LI channel
-        threshold    : physical-space threshold for GT=0 (default 1/255)
+        pred, target   : (B, C, H, W) in NORMALISED space
+        alpha          : FP cost relative to FN (0.1 → FP penalised at 10%%).
+                         Anneal toward 1.0 over training to balance.
+        li_idx         : index of LI channel
+        norm_threshold : threshold in NORMALISED space to distinguish
+                         lightning (GT>0) from no-lightning (GT=0).
+
+                         Derivation: physical 1/255 → cbrt(1/255) ≈ 0.158
+                         → normalised = (0.158 - mean_li) / std_li
+                         With measured mean_li=0.089, std_li=1.14:
+                         norm_threshold = (0.158 - 0.089) / 1.14 ≈ 0.06
+
+                         This is the normalised equivalent of "at least one
+                         flash count recorded", consistent with evaluation.
     """
     pred_li   = pred[:, li_idx]      # (B, H, W)
     target_li = target[:, li_idx]
 
-    gt_pos  = (target_li >= threshold).float()   # 1 where lightning present
-    gt_neg  = 1.0 - gt_pos
+    # Threshold in normalised space — consistent with the data pipeline
+    gt_pos = (target_li >= norm_threshold).float()   # 1 where lightning present
+    gt_neg = 1.0 - gt_pos
 
-    sq_err  = (pred_li - target_li) ** 2
+    sq_err = (pred_li - target_li) ** 2
 
-    # FP: model predicts non-zero where GT=0 (penalised by alpha)
-    # FN: model predicts zero where GT>0  (full penalty)
+    # FP: predicted non-zero where GT=0 (penalised by alpha)
+    # FN: predicted zero  where GT>0  (full penalty)
     loss = (alpha * gt_neg + gt_pos) * sq_err
     return loss.mean()
 
@@ -666,7 +676,8 @@ def training_loss(
     L_denoise = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, dyn_w)
 
     # ── L_asymmetric: reduces FAR by penalising FP less than FN ──────
-    L_asym = asymmetric_li_loss(pred, y, alpha=asym_alpha, li_idx=li_idx)
+    L_asym = asymmetric_li_loss(pred, y, alpha=asym_alpha, li_idx=li_idx,
+                                norm_threshold=0.06)
 
     # ── L_neighbourhood: spatial consistency at 2 scales ─────────────
     L_nbr = neighbourhood_li_loss(pred, y, li_idx=li_idx, scales=nbr_scales)
