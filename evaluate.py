@@ -1498,6 +1498,9 @@ def run_test_evaluation(args):
             model, context, ch_mask, device,
             n_members = args.n_members,
             cfg_scale = args.cfg_scale,
+            S_churn   = args.S_churn,
+            S_noise   = args.S_noise,
+            num_steps = args.num_steps,
         )  # (B, M, T_out, C, H, W) residuals
 
         # Reconstruct absolute normalised frames before all metric computation
@@ -1752,20 +1755,32 @@ def run_test_evaluation(args):
 # Entry point
 # ===================================================================
 if __name__ == "__main__":
-    import argparse
+    import argparse, sys as _sys, pathlib as _pathlib
+
+    # ---- peek at --config before full parse ----
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
 
     p = argparse.ArgumentParser(
         description="Run full test-set evaluation on a trained METSAT nowcasting model."
     )
-    p.add_argument("--checkpoint",    required=True,
+    p.add_argument("--config",        default=None,
+                   help="Path to YAML config (configs/evaluate.yaml). CLI args override YAML.")
+    p.add_argument("--checkpoint",    default=None,
                    help="Path to best.pt or latest.pt")
-    p.add_argument("--test_roots",    required=True, nargs="+",
+    p.add_argument("--test_roots",    nargs="+", default=None,
                    help="One or more dataset root directories for the test set")
     p.add_argument("--output_dir",    default="outputs/evaluation",
                    help="Directory to write metrics, CSV and plots")
     p.add_argument("--n_members",     type=int,   default=10,
                    help="Ensemble members (more = slower but better CRPS)")
     p.add_argument("--cfg_scale",     type=float, default=1.5)
+    p.add_argument("--S_churn",       type=float, default=40.0,
+                   help="EDM stochastic churn. 0=deterministic, 40=moderate, 80=high.")
+    p.add_argument("--S_noise",       type=float, default=1.003)
+    p.add_argument("--num_steps",     type=int,   default=20,
+                   help="Denoising steps per ensemble member.")
     p.add_argument("--batch_size",    type=int,   default=4)
     p.add_argument("--num_workers",   type=int,   default=4)
     p.add_argument("--img_size",      nargs=2, type=int, default=[256, 256])
@@ -1792,5 +1807,31 @@ if __name__ == "__main__":
                    help="Neighbourhood half-widths (pixels) for FSS curve")
     p.add_argument("--pixel_size_km", type=float, default=4.0,
                    help="Pixel size in km — used to label FSS x-axis in km")
+    # ---- load YAML and set as defaults ----
+    if _pre_args.config is not None:
+        if not _pathlib.Path(_pre_args.config).exists():
+            p.error(f"Config file not found: {_pre_args.config}")
+        try:
+            import yaml as _yaml
+        except ImportError:
+            p.error("PyYAML required: pip install pyyaml")
+        with open(_pre_args.config) as _f:
+            _yaml_cfg = _yaml.safe_load(_f) or {}
+        _known = {a.dest for a in p._actions}
+        _unknown = set(_yaml_cfg.keys()) - _known
+        if _unknown:
+            print(f"[evaluate.py] WARNING: unknown YAML keys ignored: {_unknown}",
+                  file=_sys.stderr)
+        _flat = {k: (None if v == "null" else v)
+                 for k, v in _yaml_cfg.items() if k != "config"}
+        p.set_defaults(**_flat)
+
+    # ---- CLI overrides YAML ----
     args = p.parse_args()
+
+    if args.checkpoint is None:
+        p.error("--checkpoint is required (set in CLI or configs/evaluate.yaml)")
+    if args.test_roots is None:
+        p.error("--test_roots is required (set in CLI or configs/evaluate.yaml)")
+
     run_test_evaluation(args)
