@@ -71,8 +71,11 @@ def generate_ensemble(
     Uses classifier-free guidance: final = uncond + cfg_scale*(cond - uncond)
     """
     model.eval()
-    B, T_in, C, H, W = context.shape
-    T_out = model.T_out
+    B, T_in, C_ctx, H, W = context.shape
+    T_out  = model.T_out
+    # C_data: number of output channels (data channels only, not binary LI ctx)
+    # Derived from the model's output conv weight shape
+    C = model.precond.unet.out_conv.weight.shape[0]
 
     members = []
     member_bar = tqdm(
@@ -100,7 +103,7 @@ def generate_ensemble(
                 return uncond + cfg_scale * (cond - uncond)
 
             pred = edm_sampler(
-                denoiser_fn, (B, C, H, W), device,
+                denoiser_fn, (B, C, H, W), device,  # (B, C_data, H, W)
                 num_steps = num_steps,
                 sigma_min = model.precond.sigma_data * 0.01,
                 sigma_max = 80.0,

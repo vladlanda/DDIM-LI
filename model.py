@@ -330,14 +330,14 @@ class MultiStepDenoiser(nn.Module):
 
     def forward(
         self,
-        x_noisy:  torch.Tensor,
+        x_noisy:  torch.Tensor,   # (B, C_data, H, W)  — data channels only
         sigma:    torch.Tensor,
-        context:  torch.Tensor,
-        ch_mask:  torch.Tensor,
+        context:  torch.Tensor,   # (B, T_in, C_ctx, H, W)  C_ctx = C_data or C_data+1
+        ch_mask:  torch.Tensor,   # (B, C_data)
         lead_idx: torch.Tensor,
     ) -> torch.Tensor:
-        B, T_in, C, H, W = context.shape
-        ctx_flat  = context.view(B, T_in * C, H, W)
+        B, T_in, C_ctx, H, W = context.shape
+        ctx_flat  = context.view(B, T_in * C_ctx, H, W)
         lead_time = (lead_idx.float() + 1) * self.dt_min
         return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
 
