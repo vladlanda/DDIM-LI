@@ -1,0 +1,62 @@
+# ============================================================
+# METSAT Lightning Nowcasting — Evaluation Configuration
+# ============================================================
+# Usage:
+#   python evaluate.py --config configs/evaluate.yaml
+#   python evaluate.py --config configs/evaluate.yaml --S_churn 80  # CLI overrides yaml
+
+# ----------------------------------------------------------
+# Paths
+# ----------------------------------------------------------
+checkpoint:   outputs/pred_1h_input_3h_dim_64/best.pt
+
+test_roots:
+  - /home/vladlanda/Workplace/LI-DATASETS/inference/central_africa_4
+
+output_dir:   outputs/eval_pred_1h_input_3h_dim_64
+
+# ----------------------------------------------------------
+# Ensemble sampling
+# ----------------------------------------------------------
+n_members:    32
+cfg_scale:    1.5
+num_steps:    20
+
+# EDM stochastic sampler (Algorithm 2, Karras et al. 2022)
+# S_churn=0  → deterministic DDIM (fastest, least diverse)
+# S_churn=40 → moderate stochasticity (recommended)
+# S_churn=80 → high stochasticity
+S_churn:      40.0
+S_noise:      1.003
+
+# ----------------------------------------------------------
+# Temperature scaling (post-hoc calibration)
+# ----------------------------------------------------------
+# Step 1: run evaluate.py without temperature_path to produce plot_data.npz
+# Step 2: run with --fit_temperature to produce temperatures.json
+# Step 3: run with --temperature_path to apply calibration
+temperature_path:  null   # set to path of temperatures.json once fitted
+fit_temperature:   null   # set to path of plot_data.npz to fit temperatures
+
+# ----------------------------------------------------------
+# Metrics
+# ----------------------------------------------------------
+fss_prob_thresholds:  [0.1, 0.3, 0.5]
+fss_scales:           [1, 2, 4, 8, 16, 32]
+pixel_size_km:        4.0
+li_event_threshold:   0.1
+
+# ----------------------------------------------------------
+# Plots
+# ----------------------------------------------------------
+plot:          true
+plot_only:     false
+max_plots:     20
+
+# ----------------------------------------------------------
+# Hardware
+# ----------------------------------------------------------
+gpu:          0
+batch_size:   4
+num_workers:  4
+img_size:     [64, 64]

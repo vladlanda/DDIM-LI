@@ -299,14 +299,15 @@ class METSATDataset(Dataset):
         self,
         root: str,
         channel_list: List[str],
-        T_in: int = 6,           # context frames
-        T_out: int = 36,         # 36 × 10 min = 6 hours
-        dt_min: int = 10,        # minutes between frames
+        T_in: int = 6,
+        T_out: int = 36,
+        dt_min: int = 10,
         img_size: Tuple[int,int] = (256, 256),
         stats: Optional[Dict] = None,
         stat_path: Optional[str] = None,
         augment: bool = True,
-        max_samples: Optional[int] = None,   # limit sequences for fast testing
+        max_samples: Optional[int] = None,
+        binary_li_ctx: bool = True,
     ):
         self.root         = root
         self.channel_list = channel_list
@@ -350,6 +351,7 @@ class METSATDataset(Dataset):
         self._norm_std  = np.array([
             self.stats[ch]["std"]  if ch in self.stats else 0.5
             for ch in channel_list], dtype=np.float32)
+        self.binary_li_ctx = binary_li_ctx
         self._cbrt_mask = np.array([
             self.stats[ch]["transform"] == "cbrt" if ch in self.stats else False
             for ch in channel_list])
@@ -419,8 +421,23 @@ class METSATDataset(Dataset):
         else:
             li_density = 0.0
 
+        # Binary LI context: append (li >= 1/255) as extra channel per context frame.
+        # Gives the model an explicit spatial prior on where lightning was occurring.
+        # Following Ravuri et al. 2021 (DGMR) explicit rain mask conditioning.
+        if self.binary_li_ctx and li_idx is not None:
+            li_norm = context[:, li_idx]                              # (T_in, H, W)
+            li_phys = li_norm * self._norm_std[li_idx] + self._norm_mean[li_idx]
+            if self._cbrt_mask[li_idx]:
+                li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
+            li_bin  = (li_phys >= 1.0 / 255.0).astype(np.float32)    # (T_in, H, W)
+            context_out = np.concatenate(
+                [context, li_bin[:, None, :, :]], axis=1             # (T_in, C+1, H, W)
+            )
+        else:
+            context_out = context
+
         return {
-            "context":    torch.from_numpy(context),
+            "context":    torch.from_numpy(context_out),
             "target":     torch.from_numpy(target_residual),
             "lead_times": torch.from_numpy(lead_times),
             "ctx_mask":   torch.from_numpy(masks[:self.T_in]),
@@ -551,8 +568,9 @@ def make_dataloaders(
     stat_path:         Optional[str] = None,
     max_samples:       Optional[int] = None,
     train_val_split:   float = 0.7,
-    oversample_factor:  float = 5.0,   # high-density sequences oversampled N×
-    density_percentile: float = 75.0,  # sequences above this LI density percentile are oversampled
+    oversample_factor:  float = 5.0,
+    density_percentile: float = 75.0,
+    binary_li_ctx:      bool  = True,
 ):
     """
     Builds train and validation loaders from train_roots only.

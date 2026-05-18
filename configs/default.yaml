@@ -1,5 +1,5 @@
 # ============================================================
-# METSAT Lightning Nowcasting — Default Configuration
+# METSAT Lightning Nowcasting — nonelbo branch
 # ============================================================
 # Usage:
 #   python train.py --config configs/default.yaml
@@ -8,97 +8,99 @@
 # ----------------------------------------------------------
 # Data
 # ----------------------------------------------------------
-# Regions used for training. Internally split into train/val
-# via train_val_split (temporal — no data leakage).
 train_roots:
-  # - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
   - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1
   - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2
   - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
 
-# Held-out regions — NEVER used during training.
-# Only passed to evaluate.py after training is complete.
 test_roots:
-  # - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
   - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
 
-# First 70% of each region's sequences → train, last 30% → val.
-# Split is temporal (chronological), not random.
+# Temporal split — first 80% train, last 20% validation (no leakage)
 train_val_split: 0.8
- 
-channels:           # order matters: index 0=ir, 1=li, 2=ch0, 3=ch1
+
+channels:
   - ir
   - li
   - ch0
   - ch1
- 
-T_in:    18          # context frames  (6 × 10 min = 1 hour)
-T_out:   6         # forecast steps  (36 × 10 min = 6 hours)
-dt_min:  10         # minutes between frames
+
+T_in:    18         # context frames  (18 × 10 min = 3 hours)
+T_out:   6          # forecast steps  (6  × 10 min = 1 hour)
+dt_min:  10
 img_size: [64, 64]
- 
-# Set to a small integer (e.g. 50) to load only a subset of sequences.
-# Useful for quickly verifying the pipeline works before a full training run.
-# null = load everything (production default)
 max_samples: null
- 
+
 # ----------------------------------------------------------
 # Model architecture
 # ----------------------------------------------------------
-base_channels:     128
-channel_mults:     [1, 2, 3, 4]   # feature map sizes: 128, 256, 384, 512
+base_channels:     64
+channel_mults:     [1, 2, 3, 4]
 num_res_blocks:    2
-attn_resolutions:  [16, 8]        # apply self-attention at these spatial sizes
+attn_resolutions:  [16, 8]
 dropout:           0.1
-emb_dim:           512            # conditioning embedding dimension
-sigma_data:        1.0            # EDM sigma_data (≈ std of normalised targets)
- 
+emb_dim:           256
+sigma_data:        1.0            # measured RMS residual std across all training folders
+
 # ----------------------------------------------------------
 # EDM noise schedule
 # ----------------------------------------------------------
-P_mean:    -1.2    # lognormal mean for sigma sampling
-P_std:      1.2    # lognormal std  for sigma sampling
+P_mean:    -1.2
+P_std:      1.2
 sigma_min:  0.002
 sigma_max:  80.0
- 
+
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-# batch_size is PER GPU.
-# With 2 × RTX 5090 and batch_size=4 → effective batch = 8.
-# RTX 5090 has 32 GB VRAM — you can push batch_size to 8 or 16
-# depending on img_size and T_in/T_out.
-epochs:         999
-batch_size:     64
+epochs:         300
+batch_size:     32
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
 ema_decay:      0.9999
-amp:            true       # mixed precision (bf16 preferred on Ada/Blackwell GPUs)
-num_workers:    4          # per GPU; total CPU workers = num_workers × num_gpus
- 
-# Loss weights
-cfg_drop_prob:    0.15     # probability of nulling context (for CFG training)
-spectral_weight:  0.1      # FFT magnitude loss weight
-li_weight:        30.0     # base upweight for LI channel (dynamic per-sample scaling applied on top)
-li_weight_beta:   0.9999   # Cui et al. 2019 beta — controls dynamic weight smoothness
-                           # 0.9999 recommended; lower = more aggressive rare-event focus
+amp:            true
+num_workers:    4
+
+# ----------------------------------------------------------
+# Loss function
+# ----------------------------------------------------------
+cfg_drop_prob:   0.15
+
+# Channel weighting — Cui et al. 2019 effective number formula
+li_weight:       30.0
+li_weight_beta:  0.9999
+
+# Asymmetric FP/FN loss — Gao et al. 2022
+# Reduces FAR by penalising false positives less than false negatives early in training
+asym_weight:     1.0
+asym_alpha:      0.3    # FP penalised at 30% of FN cost; anneal toward 1.0 manually
+
+# Neighbourhood spatial loss — Zhang et al. 2023
+# Penalises spatial displacement; directly improves FSS
+nbr_weight:      0.5
+nbr_scales:      [5, 11]   # kernel sizes in pixels (≈20km and ≈44km at 4km/px)
+
+# Spectral loss — applied to IR/cloud channels only (not LI)
+spectral_weight: 0.1
 
 # Stratified sequence sampling
-oversample_factor:  5.0    # high-density LI sequences oversampled N× via WeightedRandomSampler
-density_percentile: 75.0   # sequences with LI density above this percentile (75th) are oversampled
-                           # 75th percentile = top 25% densest lightning sequences drawn 5× more often
- 
+oversample_factor:  5.0    # top-density sequences oversampled N×
+density_percentile: 75.0   # 75th percentile LI density threshold
+
+# Binary LI context channel — Ravuri et al. 2021
+# Appends (li >= 1/255) as extra channel to each context frame
+binary_li_ctx:   true
+
 # ----------------------------------------------------------
 # Validation & logging
 # ----------------------------------------------------------
-slow_val:     false         # set false to skip ODE-solver eval during exploratory runs
-val_every:    10            # run full ensemble validation every N epochs
-val_samples:  -1           # batches for both fast (every epoch) and slow (every val_every) val
-                           # -1 = full val set; >0 = random sample of that many batches
-n_members:    1            # ensemble members during validation (1 = fast, 10 = full probabilistic)
-cfg_scale:    1.5          # classifier-free guidance scale at inference
- 
-output_dir:      outputs/pred_1h_input_3h_dim_64
-resume:          true
-wandb_project:   "DDIM-LI"        # set to your project name to enable WandB
+slow_val:     false
+val_every:    10
+val_samples:  -1
+n_members:    1
+cfg_scale:    1.5
+
+output_dir:      outputs/nonelbo_1h_3h_ctx_ch64
+resume:          false
+wandb_project:   "DDIM-LI"

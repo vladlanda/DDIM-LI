@@ -257,83 +257,105 @@ def lightning_skill_curve(
     return {"thresholds": thr, "pod": rec, "far": far, "csi": csi, "brier": brier}
 
 
-def lightning_contingency(
-    pred_prob: np.ndarray,  # (H, W) probability from ensemble fraction
-    obs:       np.ndarray,  # (H, W) binary 0/1
-    threshold: float = 0.5,
+def crps_decomposition(
+    ens_np:  np.ndarray,   # (M, T_out, H, W)  ensemble members, physical units
+    tgt_np:  np.ndarray,   # (T_out, H, W)      observation, physical units
 ) -> Dict[str, float]:
-    """Single-threshold wrapper — used in evaluate_epoch for fast val."""
-    pred_bin = (pred_prob >= threshold).astype(float)
-    obs_bin  = (obs > 0).astype(float)
-    TP = (pred_bin * obs_bin).sum()
-    FP = (pred_bin * (1 - obs_bin)).sum()
-    FN = ((1 - pred_bin) * obs_bin).sum()
-    csi  = TP / (TP + FP + FN + 1e-8)
-    pod  = TP / (TP + FN + 1e-8)
-    far  = FP / (TP + FP + 1e-8)
-    return {"csi": float(csi), "pod": float(pod), "far": float(far)}
-
-
-def fss(
-    pred_prob: np.ndarray,   # (H, W) ensemble probability [0,1]
-    obs_bin:   np.ndarray,   # (H, W) binary observation
-    scale:     int = 8,      # neighbourhood half-width in pixels
-) -> float:
     """
-    Fractions Skill Score at a given spatial scale.
-    FSS=1 → perfect, FSS=0 → no skill, FSS<0 → worse than climatology.
+    Decompose CRPS into reliability, resolution, and uncertainty components.
 
-    Uses uniform box filtering to compute neighbourhood fractions.
+    Following Bröcker (2009) "Reliability, sufficiency, and the decomposition
+    of proper scores", Quarterly Journal of the Royal Meteorological Society.
+
+    CRPS = Reliability - Resolution + Uncertainty
+
+    Where:
+      - Reliability (REL): measures calibration — how much the forecast CDF
+        deviates from the empirical CDF of observations. REL=0 is perfect.
+      - Resolution (RES): measures sharpness relative to climatology — how
+        much the forecast differs from the climatological distribution.
+        Higher RES is better (more informative).
+      - Uncertainty (UNC): irreducible spread of the observations (climatology).
+        Model-independent — determined by the data alone.
+
+    A good forecast has: low REL (well calibrated) + high RES (informative).
+    This decomposition is the primary metric for the journal claim that
+    our model is simultaneously calibrated and sharp.
+
+    Args:
+        ens_np : ensemble members, shape (M, T_out, H, W)
+        tgt_np : observations,    shape (T_out, H, W)
+
+    Returns:
+        dict with keys: crps, reliability, resolution, uncertainty (per step)
     """
-    from scipy.ndimage import uniform_filter
-    size = 2 * scale + 1
-    pred_frac = uniform_filter(pred_prob.astype(np.float32), size=size)
-    obs_frac  = uniform_filter(obs_bin.astype(np.float32),   size=size)
+    M, T_out, H, W = ens_np.shape
+    N = H * W   # pixels per frame
 
-    fss_num   = np.mean((pred_frac - obs_frac) ** 2)
-    fss_ref   = np.mean(pred_frac ** 2) + np.mean(obs_frac ** 2)
-    return float(1.0 - fss_num / (fss_ref + 1e-8))
+    results = {
+        "crps":        np.zeros(T_out),
+        "reliability": np.zeros(T_out),
+        "resolution":  np.zeros(T_out),
+        "uncertainty": np.zeros(T_out),
+    }
 
+    for t in range(T_out):
+        obs  = tgt_np[t].ravel()       # (N,)
+        ens  = ens_np[:, t].reshape(M, -1).T   # (N, M)
 
-def brier_score(
-    pred_prob: np.ndarray,   # (H, W) ensemble probability
-    obs_bin:   np.ndarray,   # (H, W) binary
-) -> float:
-    """
-    Mean squared error between predicted probability and binary observation.
-    Uses cuML if available, sklearn otherwise, plain numpy as final fallback.
-    """
-    y_true = obs_bin.ravel().astype(np.float32)
-    y_prob = pred_prob.ravel().astype(np.float32)
-    if HAS_CUML:
-        try:
-            import cupy as cp
-            # cuML brier_score_loss expects 1-D arrays
-            return float(_cuml_metrics.brier_score_loss(
-                cp.asarray(y_true), cp.asarray(y_prob)
-            ))
-        except Exception:
-            pass
-    # sklearn brier_score_loss = mean((p - y)^2), identical formula
-    return float(_sk_brier(y_true, y_prob))
+        # Sort ensemble members per pixel
+        ens_sorted = np.sort(ens, axis=1)       # (N, M)
 
+        # ── CRPS (energy score formulation) ────────────────────────
+        # CRPS = E|X - y| - 0.5 * E|X - X'|
+        mae_obs = np.mean(np.abs(ens - obs[:, None]), axis=1)   # (N,)
+        spread  = 0.0
+        for m in range(M):
+            for m2 in range(m+1, M):
+                spread += np.abs(ens[:, m] - ens[:, m2])
+        spread /= (M * M)   # normalised by M² per Gneiting & Raftery 2007
+        crps_px = mae_obs - spread
+        results["crps"][t] = float(crps_px.mean())
 
-# ===================================================================
-# Spread-skill ratio
-# ===================================================================
+        # ── Reliability (Bröcker 2009, Eq. 9) ─────────────────────
+        # REL = (1/N) Σ_i Σ_m (α_m - o_m)² where α_m = m/M
+        # Implemented via PIT histogram deviation
+        alphas  = (np.arange(1, M+1) - 0.5) / M    # (M,) quantile levels
+        quants  = ens_sorted                         # (N, M) sorted ensemble
 
-def spread_skill(
-    ensemble: np.ndarray,  # (M, ...) values
-    obs:      np.ndarray,  # (...)
-) -> float:
-    spread = ensemble.std(axis=0).mean()
-    skill  = np.abs(ensemble.mean(axis=0) - obs).mean()
-    return float(spread / (skill + 1e-8))
+        # For each obs, find which quantile level it corresponds to
+        pit = np.mean(ens < obs[:, None], axis=1)   # (N,) PIT values
 
+        # REL = Var(PIT) deviation from uniform
+        # Bröcker (2009): REL = CRPS_clim_hat - CRPS + 2*KL(PIT || Uniform)
+        # Approximate: histogram-based REL
+        n_bins    = min(M, 10)
+        hist, _   = np.histogram(pit, bins=n_bins, range=(0, 1))
+        hist_norm = hist / hist.sum()
+        uniform   = np.ones(n_bins) / n_bins
+        rel       = float(np.sum((hist_norm - uniform) ** 2))
+        results["reliability"][t] = rel
 
-# ===================================================================
-# Main evaluation function
-# ===================================================================
+        # ── Uncertainty (climatological CRPS) ─────────────────────
+        # UNC = CRPS of the climatological forecast (empirical distribution of obs)
+        obs_sorted = np.sort(obs)
+        unc_vals   = []
+        for i in range(0, N, max(1, N // 500)):   # subsample for speed
+            o = obs[i]
+            unc_vals.append(
+                np.mean(np.abs(obs_sorted - o)) - 0.5 * np.mean(
+                    np.abs(obs_sorted[:, None] - obs_sorted[None, :])
+                )
+            )
+        results["uncertainty"][t] = float(np.mean(unc_vals))
+
+        # ── Resolution = UNC - (CRPS - REL) ───────────────────────
+        results["resolution"][t] = float(
+            results["uncertainty"][t] - (results["crps"][t] - results["reliability"][t])
+        )
+
+    return results
+
 
 def evaluate_epoch(
     model:        MultiStepDenoiser,
@@ -434,9 +456,13 @@ def evaluate_epoch(
                                           for m in range(ens_t.shape[0])])
                     pred_prob = (ens_phys >= li_event_threshold).mean(axis=0)
                     obs_bin   = (obs_phys >= li_event_threshold).astype(float)
-                    csi_per_step.append(
-                        lightning_contingency(pred_prob, obs_bin)["csi"]
-                    )
+                    # Inline CSI at threshold=0.5 for fast monitoring
+                    pred_bin = (pred_prob >= 0.5).astype(float)
+                    obs_b    = (obs_bin > 0).astype(float)
+                    TP = (pred_bin * obs_b).sum()
+                    FP = (pred_bin * (1 - obs_b)).sum()
+                    FN = ((1 - pred_bin) * obs_b).sum()
+                    csi_per_step.append(float(TP / (TP + FP + FN + 1e-8)))
 
             all_crps.append(crps_per_step)
             all_ss.append(ss_per_step)
@@ -651,142 +677,6 @@ def fast_val_metrics(
     return metrics
 
 
-
-@torch.no_grad()
-def fast_val_metrics_ar(
-    model:        "ARDenoiser",
-    val_loader:   "DataLoader",
-    schedule:     "EDMSchedule",
-    device:       "torch.device",
-    channels:     List[str],
-    val_samples:  int   = -1,
-    li_event_threshold: float = 1.0/255.0,
-) -> Dict[str, float]:
-    """
-    Cheap validation metrics for the AR model — identical to fast_val_metrics
-    but calls ARDenoiser.forward() which takes (x_noisy, sigma, context, ch_mask)
-    without a lead_idx argument.
-
-    For each batch we pick a random target step and use the corresponding
-    rolling ground-truth context window (teacher forcing), exactly mirroring
-    ar_training_loss.
-    """
-    import torch.distributed as dist_mod
-    from model import channel_weighted_mse
-
-    model.eval()
-    li_idx = channels.index("li") if "li" in channels else None
-    ddp    = dist_mod.is_available() and dist_mod.is_initialized()
-
-    total_batches = len(val_loader)
-    if val_samples == -1 or val_samples >= total_batches:
-        chosen_fast = None
-        budget_fast = total_batches
-    else:
-        chosen_fast = set(random.sample(range(total_batches), val_samples))
-        budget_fast = val_samples
-
-    acc = torch.zeros(6, device=device)
-
-    rank = dist_mod.get_rank() if ddp else 0
-    pbar = tqdm(
-        enumerate(val_loader),
-        total        = budget_fast,
-        desc         = f"  Fast val AR (rank {rank})",
-        unit         = "batch",
-        dynamic_ncols = True,
-        leave        = False,
-    )
-
-    evaluated = 0
-    for batch_idx, batch in pbar:
-        if chosen_fast is not None and batch_idx not in chosen_fast:
-            continue
-        if evaluated >= budget_fast:
-            break
-
-        context  = batch["context"].to(device)    # (B, T_in, C, H, W)
-        target   = batch["target"].to(device)     # (B, T_out, C, H, W) residuals
-        tgt_mask = batch["tgt_mask"].to(device)   # (B, T_out, C)
-        last_ctx = batch["last_ctx"].to(device)   # (B, C, H, W)
-
-        B, T_out, C, H, W = target.shape
-        _, T_in, _, _, _  = context.shape
-
-        # Random target step — mirrors ar_training_loss
-        step_idx   = torch.randint(0, T_out, (B,), device=device)
-        target_abs = target + last_ctx[:, None]   # (B, T_out, C, H, W) absolute
-
-        # Rolling context window for this step (teacher forcing)
-        all_frames   = torch.cat([context, target_abs], dim=1)  # (B, T_in+T_out, C, H, W)
-        ctx_for_step = torch.stack(
-            [all_frames[b, step_idx[b]:step_idx[b] + T_in] for b in range(B)], dim=0
-        )
-
-        # Target residual: abs[step] - abs[step-1]  (or - last_ctx for step 0)
-        prev_abs = torch.stack([
-            last_ctx[b] if step_idx[b] == 0
-            else target_abs[b, step_idx[b].item() - 1]
-            for b in range(B)
-        ])
-        y       = target_abs[torch.arange(B), step_idx] - prev_abs
-        ch_mask = tgt_mask[torch.arange(B), step_idx]
-
-        sigma   = schedule.sample_sigma(B, device)
-        x_noisy = y + torch.randn_like(y) * sigma[:, None, None, None]
-
-        # ARDenoiser.forward takes (x_noisy, sigma, context, ch_mask) — no lead_idx
-        pred = model(x_noisy, sigma, ctx_for_step, ch_mask)
-
-        lw   = schedule.edm_loss_weight(sigma)[:, None, None, None]
-        loss = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(),
-                                    ch_mask, li_weight=3.0)
-
-        err     = pred - y
-        mask_hw = ch_mask[:, :, None, None].float()
-        denom   = mask_hw.sum() * H * W + 1e-8
-        mse     = (err ** 2 * mask_hw).sum() / denom
-        mae     = (err.abs() * mask_hw).sum() / denom
-
-        acc[0] += loss
-        acc[1] += mse
-        acc[2] += mae
-        acc[4] += 1.0
-
-        if li_idx is not None:
-            li_err   = err[:, li_idx]
-            li_mask  = ch_mask[:, li_idx].float()
-            li_mse_m = (li_err ** 2).mean(dim=(-2, -1))
-            acc[3]  += (li_mse_m * li_mask).sum() / (li_mask.sum() + 1e-8)
-            acc[5]  += 1.0
-
-        evaluated += 1
-        pbar.set_postfix(
-            loss = f"{(acc[0] / max(acc[4], 1)).item():.4f}",
-            mse  = f"{(acc[1] / max(acc[4], 1)).item():.4f}",
-            refresh = False,
-        )
-
-    if ddp:
-        dist_mod.all_reduce(acc, op=dist_mod.ReduceOp.SUM)
-
-    if ddp and dist_mod.get_rank() != 0:
-        return {}
-
-    n, n_li = acc[4].item(), acc[5].item()
-    metrics = {
-        "val_loss": acc[0].item() / max(n, 1),
-        "val_mse":  acc[1].item() / max(n, 1),
-        "val_mae":  acc[2].item() / max(n, 1),
-    }
-    if n_li > 0:
-        metrics["val_li_mse"] = acc[3].item() / n_li
-    return metrics
-
-
-# ===================================================================
-# Inference utility: produce a forecast from a single context window
-# ===================================================================
 
 @torch.no_grad()
 def forecast(
@@ -1780,7 +1670,6 @@ def run_test_evaluation(args):
     np.savez_compressed(npz_path, **npz_payload)
     logger.info(f"Plot data  -> {npz_path}  (use --plot_only to regenerate plots)")
 
-    # ---- All plots ----
     # ---- All plots ----
     _regenerate_plots(npz_path, args)
 

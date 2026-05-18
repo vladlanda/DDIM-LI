@@ -79,14 +79,36 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--num_workers",     type=int,   default=4,
                         help="DataLoader workers PER GPU.")
     parser.add_argument("--cfg_drop_prob",   type=float, default=0.15)
-    parser.add_argument("--spectral_weight", type=float, default=0.1)
-    parser.add_argument("--li_weight",        type=float, default=30.0)
+    # -- Channel weighting (Cui et al. 2019) --
+    parser.add_argument("--li_weight",        type=float, default=30.0,
+                        help="Base LI channel upweight. Dynamic per-sample scaling applied on top.")
     parser.add_argument("--li_weight_beta",   type=float, default=0.9999,
                         help="Beta for Cui et al. 2019 effective number formula.")
+    # -- Asymmetric FP/FN loss (Gao et al. 2022) --
+    parser.add_argument("--asym_weight",     type=float, default=1.0,
+                        help="Weight for asymmetric LI loss term.")
+    parser.add_argument("--asym_alpha",      type=float, default=0.3,
+                        help="FP cost relative to FN. 0.3 = FP penalised at 30%% of FN. "
+                             "Anneal toward 1.0 during training to balance.")
+    # -- Neighbourhood spatial loss (Zhang et al. 2023) --
+    parser.add_argument("--nbr_weight",      type=float, default=0.5,
+                        help="Weight for neighbourhood spatial consistency loss.")
+    parser.add_argument("--nbr_scales",      nargs="+", type=int, default=[5, 11],
+                        help="Kernel sizes for neighbourhood avg_pool (pixels). "
+                             "k=5 ≈ 20km, k=11 ≈ 44km at 4km/pixel.")
+    # -- Spectral loss (cloud channels only) --
+    parser.add_argument("--spectral_weight", type=float, default=0.1,
+                        help="FFT magnitude loss weight. Applied to IR/cloud channels only.")
+    # -- Stratified sampling --
     parser.add_argument("--oversample_factor",  type=float, default=5.0,
-                        help="High-density LI sequences oversampled N× (WeightedRandomSampler).")
+                        help="High-density LI sequences oversampled N×.")
     parser.add_argument("--density_percentile", type=float, default=75.0,
-                        help="Sequences with LI density above this percentile are oversampled.")
+                        help="Sequences above this LI density percentile are oversampled.")
+    # -- Binary LI context channel --
+    parser.add_argument("--binary_li_ctx",   type=_bool, default=True,
+                        help="Add a binary (>=1/255) LI channel to context frames. "
+                             "Gives the model an explicit spatial prior on where "
+                             "lightning was occurring. Following Ravuri et al. 2021.")
     parser.add_argument("--n_members",       type=int,   default=10)
     parser.add_argument("--cfg_scale",       type=float, default=1.5)
 
@@ -101,12 +123,6 @@ def add_arguments(parser: argparse.ArgumentParser):
                              "-1 = full val set; >0 = random sample of that many batches.")
     parser.add_argument("--output_dir",   type=str, default="outputs/run1")
     parser.add_argument("--resume",       type=_bool, default=False)
-    parser.add_argument("--extend",       type=_bool, default=False,
-                        help="Load weights from latest.pt but reset the epoch counter "
-                             "and LR scheduler for a fresh training phase. "
-                             "Use together with --resume. Output is written to "
-                             "<output_dir>_ext1 (then _ext2, etc.). "
-                             "--epochs sets the length of this new phase.")
     parser.add_argument("--wandb_project", type=str, default="")
 
     return parser

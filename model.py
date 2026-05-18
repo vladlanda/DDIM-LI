@@ -1,24 +1,22 @@
 """
-EDM-style diffusion model for METSAT lightning nowcasting.
+Conditional score-based denoising network for METSAT lightning nowcasting.
 
-Following: "Elucidating the Design Space of Diffusion-Based Generative Models"
-           Karras et al. 2022  (EDM)
-           +
-           "Probabilistic weather forecasting with machine learning"
-           Price et al. 2023  (GenCast)
+Architecture: EDM-style UNet (Karras et al. 2022) with composite task-specific loss.
+We do not claim strict ELBO optimisation. We train a denoising network with a
+composite loss designed for simultaneous binary skill and calibrated uncertainty:
 
-Key design decisions:
-  - U-Net with residual blocks and self-attention at multiple scales
-  - Conditioning: context frames concatenated channel-wise to noisy input
-  - Lead-time embedding injected via AdaGroupNorm at every residual block
-  - Channel mask injected to handle optional satellite channels
-  - Classifier-free guidance (CFG): context dropped with prob p_uncond
-  - Spectral (FFT) auxiliary loss to preserve high-frequency sharpness
-  - Direct multi-step prediction: model predicts T_out residuals at once
-    conditioned on lead-time embeddings → avoids autoregressive blur
+    L = L_denoise + λ_a · L_asymmetric + λ_n · L_neighbourhood + λ_s · L_spectral
+
+References:
+  - Karras et al. 2022  (EDM architecture and sampler)
+  - Cui et al. 2019     (effective number weighting)
+  - Gao et al. 2022     (asymmetric loss for convective nowcasting)
+  - Zhang et al. 2023   (neighbourhood spatial consistency loss)
 """
 
 import math
+from typing import List, Optional, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,12 +24,12 @@ from einops import rearrange
 
 
 # ===================================================================
-# Positional / Fourier embeddings
+# Positional embeddings
 # ===================================================================
 
 def timestep_embedding(t: torch.Tensor, dim: int, max_period: float = 10000.0):
     """Sinusoidal embedding for scalar t (sigma or lead-time)."""
-    half = dim // 2
+    half  = dim // 2
     freqs = torch.exp(
         -math.log(max_period) * torch.arange(half, device=t.device) / (half - 1)
     )
@@ -47,24 +45,20 @@ def timestep_embedding(t: torch.Tensor, dim: int, max_period: float = 10000.0):
 # ===================================================================
 
 class AdaGroupNorm(nn.Module):
-    """
-    Group norm whose scale & shift are predicted from a conditioning vector.
-    Replaces the standard GN+add-emb pattern with a single modulation.
-    """
+    """Group norm with scale & shift predicted from a conditioning vector."""
     def __init__(self, num_channels: int, emb_dim: int, num_groups: int = 8):
         super().__init__()
         self.gn   = nn.GroupNorm(num_groups, num_channels, affine=False)
         self.proj = nn.Linear(emb_dim, 2 * num_channels)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, H, W)   emb: (B, emb_dim)
-        x   = self.gn(x)
+        x = self.gn(x)
         scale, shift = self.proj(emb).chunk(2, dim=-1)
         return x * (1 + scale[:, :, None, None]) + shift[:, :, None, None]
 
 
 # ===================================================================
-# Building blocks
+# UNet building blocks
 # ===================================================================
 
 class ResBlock(nn.Module):
@@ -116,8 +110,7 @@ class Upsample(nn.Module):
         self.conv = nn.Conv2d(channels, channels, 3, padding=1)
 
     def forward(self, x):
-        x = F.interpolate(x, scale_factor=2, mode="nearest")
-        return self.conv(x)
+        return F.interpolate(x, scale_factor=2, mode="nearest")
 
 
 # ===================================================================
@@ -126,17 +119,12 @@ class Upsample(nn.Module):
 
 class UNet(nn.Module):
     """
-    Conditioned U-Net that denoises a (B, C_in, H, W) tensor.
-
-    Architecture built with fully explicit channel accounting:
-      - enc_plan  : list of (type, in_ch, out_ch)  built at __init__
-      - dec_plan  : same for decoder
-    The forward pass replays these plans, so there is zero ambiguity
-    about tensor sizes at any point.
+    Conditioned U-Net denoiser.
 
     Input layout (channels concatenated):
       [noisy_residual | context_frames | channel_mask]
-      = C + T_in*C + C  =  C*(T_in+2)  total channels
+      = C + T_in*C_ctx + C   total channels
+    where C_ctx = C + 1 when binary_li_ctx=True (extra binary LI channel per frame).
     """
 
     def __init__(
@@ -152,7 +140,7 @@ class UNet(nn.Module):
         num_groups:       int   = 8,
     ):
         super().__init__()
-        self.emb_dim   = emb_dim
+        self.emb_dim    = emb_dim
         self.num_groups = num_groups
         attn_res = set(attn_resolutions)
 
@@ -170,12 +158,8 @@ class UNet(nn.Module):
         self.input_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
         # ── Build encoder plan ──────────────────────────────────────
-        # Each entry is a dict describing one operation:
-        #   {"type": "res",   "in": x, "out": y}
-        #   {"type": "attn",  "ch":  x}
-        #   {"type": "down",  "ch":  x}
         enc_plan: list[dict] = []
-        skip_channels: list[int] = []   # ch pushed onto skip stack per res/attn block
+        skip_channels: list[int] = []
         ch  = base_channels
         res = 256
 
@@ -192,9 +176,9 @@ class UNet(nn.Module):
                 enc_plan.append({"type": "down", "ch": ch})
                 res //= 2
 
-        # ── Build decoder plan (mirror, with skip cats) ─────────────
+        # ── Build decoder plan ──────────────────────────────────────
         dec_plan: list[dict] = []
-        skips_copy = list(skip_channels)   # copy; pop from end
+        skips_copy = list(skip_channels)
 
         for level, mult in reversed(list(enumerate(channel_mults))):
             out_ch = base_channels * mult
@@ -203,13 +187,13 @@ class UNet(nn.Module):
                 dec_plan.append({"type": "res", "in": ch + skip_ch, "out": out_ch})
                 ch = out_ch
                 if res in attn_res:
-                    skip_ch2 = skips_copy.pop()   # attn skip (same ch, no transform)
+                    skips_copy.pop()
                     dec_plan.append({"type": "attn", "ch": ch})
             if level > 0:
                 dec_plan.append({"type": "up", "ch": ch})
                 res *= 2
 
-        # ── Instantiate modules from plans ──────────────────────────
+        # ── Instantiate modules ─────────────────────────────────────
         self.enc_blocks = nn.ModuleList()
         for p in enc_plan:
             if p["type"] == "res":
@@ -220,11 +204,7 @@ class UNet(nn.Module):
                 self.enc_blocks.append(Downsample(p["ch"]))
         self.enc_plan = enc_plan
 
-        bot_ch = ch  # channel count entering bottleneck (= ch after last enc level)
-        # recompute: ch was mutated above; trust dec_plan entry[0] in_ch - skip
-        # Actually bot_ch is the ch value right before we started the dec_plan loop,
-        # which equals the ch value after the last enc level's last resblock.
-        # We can read it from enc_plan safely:
+        bot_ch = base_channels
         for p in reversed(enc_plan):
             if p["type"] == "res":
                 bot_ch = p["out"]; break
@@ -243,7 +223,6 @@ class UNet(nn.Module):
                 self.dec_blocks.append(Upsample(p["ch"]))
         self.dec_plan = dec_plan
 
-        # Final out channels = last res out in dec_plan
         final_ch = bot_ch
         for p in dec_plan:
             if p["type"] == "res":
@@ -252,41 +231,34 @@ class UNet(nn.Module):
         self.out_norm = nn.GroupNorm(num_groups, final_ch)
         self.out_conv = nn.Conv2d(final_ch, out_channels, 1)
 
-    # ── Forward ─────────────────────────────────────────────────────
     def forward(
         self,
-        x:         torch.Tensor,   # (B, in_channels, H, W)
-        sigma:     torch.Tensor,   # (B,)
-        lead_time: torch.Tensor,   # (B,)
-        ch_mask:   torch.Tensor,   # (B, out_channels)
+        x:         torch.Tensor,
+        sigma:     torch.Tensor,
+        lead_time: torch.Tensor,
+        ch_mask:   torch.Tensor,
     ) -> torch.Tensor:
 
-        # Conditioning embedding
         sigma_e = self.sigma_emb(timestep_embedding(sigma,     self.emb_dim))
         lead_e  = self.lead_emb( timestep_embedding(lead_time, self.emb_dim))
         mask_e  = self.mask_emb(ch_mask.float())
         emb     = self.emb_proj(torch.cat([sigma_e, lead_e, mask_e], dim=-1))
 
-        # Encoder
         h     = self.input_conv(x)
         skips = []
 
         for block, plan in zip(self.enc_blocks, self.enc_plan):
             if plan["type"] == "res":
-                h = block(h, emb)
-                skips.append(h)
+                h = block(h, emb); skips.append(h)
             elif plan["type"] == "attn":
-                h = block(h)
-                skips.append(h)
+                h = block(h);      skips.append(h)
             elif plan["type"] == "down":
-                h = block(h)          # no skip pushed for downsamples
+                h = block(h)
 
-        # Bottleneck
         h = self.mid1(h, emb)
         h = self.mid_attn(h)
         h = self.mid2(h, emb)
 
-        # Decoder
         for block, plan in zip(self.dec_blocks, self.dec_plan):
             if plan["type"] == "res":
                 s = skips.pop()
@@ -295,13 +267,12 @@ class UNet(nn.Module):
                 h = torch.cat([h, s], dim=1)
                 h = block(h, emb)
             elif plan["type"] == "attn":
-                s = skips.pop()       # consume matching attn skip
+                skips.pop()
                 h = block(h)
             elif plan["type"] == "up":
                 h = block(h)
 
-        h = F.silu(self.out_norm(h))
-        return self.out_conv(h)
+        return self.out_conv(F.silu(self.out_norm(h)))
 
 
 # ===================================================================
@@ -310,39 +281,33 @@ class UNet(nn.Module):
 
 class EDMPrecond(nn.Module):
     """
-    Wraps UNet with EDM preconditioning:
-      D_θ(x; σ) = c_skip·x + c_out·F_θ(c_in·x; c_noise)
+    D_θ(x; σ) = c_skip·x + c_out·F_θ(c_in·x; c_noise)
     """
-    def __init__(self, unet: UNet, sigma_data: float = 0.5):
+    def __init__(self, unet: UNet, sigma_data: float = 1.0):
         super().__init__()
         self.unet       = unet
         self.sigma_data = sigma_data
 
     def forward(
         self,
-        x_noisy:   torch.Tensor,   # (B, C, H, W)  noisy residual
-        sigma:     torch.Tensor,   # (B,)
-        context:   torch.Tensor,   # (B, T_in*C, H, W)
-        ch_mask:   torch.Tensor,   # (B, C) binary
-        lead_time: torch.Tensor,   # (B,)
+        x_noisy:   torch.Tensor,
+        sigma:     torch.Tensor,
+        context:   torch.Tensor,
+        ch_mask:   torch.Tensor,
+        lead_time: torch.Tensor,
     ) -> torch.Tensor:
         sd = self.sigma_data
-
         c_skip  = sd**2 / (sigma**2 + sd**2)
         c_out   = sigma * sd / (sigma**2 + sd**2).sqrt()
         c_in    = 1.0   / (sigma**2 + sd**2).sqrt()
         c_noise = sigma.log() / 4.0
 
-        # Reshape scalars for broadcasting
-        c_skip  = c_skip[:, None, None, None]
-        c_out   = c_out [:, None, None, None]
-        c_in    = c_in  [:, None, None, None]
+        c_skip = c_skip[:, None, None, None]
+        c_out  = c_out [:, None, None, None]
+        c_in   = c_in  [:, None, None, None]
 
-        # Build input: scaled noisy + context + mask broadcast to spatial
-        x_in_scaled = c_in * x_noisy
-        # Expand mask to spatial
         mask_spatial = ch_mask[:, :, None, None].expand_as(x_noisy)
-        net_input = torch.cat([x_in_scaled, context, mask_spatial], dim=1)
+        net_input    = torch.cat([c_in * x_noisy, context, mask_spatial], dim=1)
 
         raw = self.unet(net_input, c_noise, lead_time, ch_mask)
         return c_skip * x_noisy + c_out * raw
@@ -354,10 +319,8 @@ class EDMPrecond(nn.Module):
 
 class MultiStepDenoiser(nn.Module):
     """
-    Wraps EDMPrecond to handle (B, T_out, C, H, W) targets.
-    Processes each lead step independently but shares weights.
-    At training: randomly sample one lead step per sample (efficient).
-    At inference: loop over all lead steps.
+    Wraps EDMPrecond for (B, T_out, C, H, W) targets.
+    Each lead step is processed independently with shared weights.
     """
     def __init__(self, precond: EDMPrecond, T_out: int, dt_min: int = 10):
         super().__init__()
@@ -367,40 +330,35 @@ class MultiStepDenoiser(nn.Module):
 
     def forward(
         self,
-        x_noisy:    torch.Tensor,   # (B, C, H, W)
-        sigma:      torch.Tensor,   # (B,)
-        context:    torch.Tensor,   # (B, T_in, C, H, W)
-        ch_mask:    torch.Tensor,   # (B, C)
-        lead_idx:   torch.Tensor,   # (B,)  0-indexed step
+        x_noisy:  torch.Tensor,
+        sigma:    torch.Tensor,
+        context:  torch.Tensor,
+        ch_mask:  torch.Tensor,
+        lead_idx: torch.Tensor,
     ) -> torch.Tensor:
         B, T_in, C, H, W = context.shape
-        ctx_flat = context.view(B, T_in * C, H, W)
-        lead_time = (lead_idx.float() + 1) * self.dt_min  # minutes
-
+        ctx_flat  = context.view(B, T_in * C, H, W)
+        lead_time = (lead_idx.float() + 1) * self.dt_min
         return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
 
     @torch.no_grad()
     def sample_all_steps(
         self,
-        context:    torch.Tensor,   # (B, T_in, C, H, W)
-        ch_mask:    torch.Tensor,   # (B, C)
-        sampler_fn,                  # callable(denoiser_fn, shape, device) -> tensor
+        context:    torch.Tensor,
+        ch_mask:    torch.Tensor,
+        sampler_fn,
         device:     torch.device,
     ) -> torch.Tensor:
         """Return (B, T_out, C, H, W) predicted residuals."""
         B, T_in, C, H, W = context.shape
         all_preds = []
-
         for step in range(self.T_out):
             lead_idx = torch.full((B,), step, device=device, dtype=torch.long)
-
-            def denoiser_fn(x, sigma):
-                return self(x, sigma, context, ch_mask, lead_idx)
-
-            pred = sampler_fn(denoiser_fn, (B, C, H, W), device)
-            all_preds.append(pred)
-
-        return torch.stack(all_preds, dim=1)  # (B, T_out, C, H, W)
+            def denoiser_fn(x, sigma, _step=step):
+                _lead = torch.full((x.shape[0],), _step, device=device, dtype=torch.long)
+                return self(x, sigma, context, ch_mask, _lead)
+            all_preds.append(sampler_fn(denoiser_fn, (B, C, H, W), device))
+        return torch.stack(all_preds, dim=1)
 
 
 # ===================================================================
@@ -411,12 +369,12 @@ class EDMSchedule:
     """EDM training noise schedule (lognormal)."""
     def __init__(self, P_mean: float = -1.2, P_std: float = 1.2,
                  sigma_min: float = 0.002, sigma_max: float = 80.0,
-                 rho: float = 7.0):
-        self.P_mean    = P_mean
-        self.P_std     = P_std
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-        self.rho       = rho
+                 sigma_data: float = 1.0):
+        self.P_mean     = P_mean
+        self.P_std      = P_std
+        self.sigma_min  = sigma_min
+        self.sigma_max  = sigma_max
+        self.sigma_data = sigma_data
 
     def sample_sigma(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Sample σ ~ lognormal(P_mean, P_std)."""
@@ -424,28 +382,24 @@ class EDMSchedule:
 
     def edm_loss_weight(self, sigma: torch.Tensor) -> torch.Tensor:
         """λ(σ) = (σ² + σ_data²) / (σ · σ_data)²"""
-        sd = 0.5
+        sd = self.sigma_data
         return (sigma**2 + sd**2) / (sigma * sd)**2
 
 
 def edm_sampler(
     denoiser_fn,
-    shape: tuple,
-    device: torch.device,
-    num_steps: int = 20,
+    shape:     tuple,
+    device:    torch.device,
+    num_steps: int   = 20,
     sigma_min: float = 0.002,
     sigma_max: float = 80.0,
-    rho: float = 7.0,
-    S_churn: float = 40.0,
-    S_min: float = 0.05,
-    S_max: float = 50.0,
-    S_noise: float = 1.003,
+    rho:       float = 7.0,
+    S_churn:   float = 40.0,
+    S_min:     float = 0.05,
+    S_max:     float = 50.0,
+    S_noise:   float = 1.003,
 ) -> torch.Tensor:
-    """
-    EDM stochastic sampler (Algorithm 2, Karras et al.).
-    denoiser_fn: (x_noisy, sigma_tensor) -> denoised_x
-    """
-    # Build sigma schedule
+    """EDM stochastic sampler — Algorithm 2, Karras et al. 2022."""
     step_indices = torch.arange(num_steps, device=device)
     t_steps = (
         sigma_max ** (1 / rho)
@@ -456,27 +410,23 @@ def edm_sampler(
     x = torch.randn(*shape, device=device) * t_steps[0]
 
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
-        t_cur_batch  = t_cur.expand(shape[0])
-        t_next_batch = t_next.expand(shape[0])
+        t_cur_b  = t_cur.expand(shape[0])
+        t_next_b = t_next.expand(shape[0])
 
-        # Stochastic churn
         gamma = min(S_churn / num_steps, math.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0.0
         t_hat = t_cur * (1 + gamma)
         if gamma > 0:
             x = x + (t_hat**2 - t_cur**2).sqrt() * S_noise * torch.randn_like(x)
 
-        t_hat_batch = t_hat.expand(shape[0]) if isinstance(t_hat, torch.Tensor) else \
-                      torch.full((shape[0],), t_hat, device=device)
+        t_hat_b = t_hat.expand(shape[0]) if isinstance(t_hat, torch.Tensor) else \
+                  torch.full((shape[0],), float(t_hat), device=device)
 
-        # Euler step
-        denoised = denoiser_fn(x, t_hat_batch)
+        denoised = denoiser_fn(x, t_hat_b)
         d_cur    = (x - denoised) / t_hat
+        x_next   = x + (t_next - t_hat) * d_cur
 
-        x_next = x + (t_next - t_hat) * d_cur
-
-        # Second-order correction (Heun)
         if i < num_steps - 1:
-            denoised_next = denoiser_fn(x_next, t_next_batch)
+            denoised_next = denoiser_fn(x_next, t_next_b)
             d_next        = (x_next - denoised_next) / t_next
             x_next        = x + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_next)
 
@@ -486,173 +436,245 @@ def edm_sampler(
 
 
 # ===================================================================
-# Losses
+# Loss functions
 # ===================================================================
 
-def spectral_loss(pred: torch.Tensor, target: torch.Tensor, weight: float = 0.1) -> torch.Tensor:
-    """
-    Penalise mismatch in FFT magnitude spectrum.
-    Encourages preservation of high-frequency detail (sharpness).
-    pred, target: (B, C, H, W)
-    """
-    pred_fft   = torch.fft.rfft2(pred)
-    target_fft = torch.fft.rfft2(target)
-    loss = F.mse_loss(pred_fft.abs(), target_fft.abs())
-    return weight * loss
-
-
 def effective_li_weight(
-    li_density: torch.Tensor,   # (B,) fraction of non-zero LI pixels in [0, 1]
+    li_density:  torch.Tensor,
     base_weight: float = 30.0,
-    beta: float = 0.9999,
-    min_weight: float = 1.0,
-    max_weight: float = 200.0,
+    beta:        float = 0.9999,
+    min_weight:  float = 1.0,
+    max_weight:  float = 200.0,
 ) -> torch.Tensor:
     """
-    Per-sample dynamic LI weight using the Effective Number of Samples
-    formula from Cui et al. (2019), "Class-Balanced Loss Based on
-    Effective Number of Samples", CVPR 2019.
+    Per-sample dynamic LI channel weight using the Effective Number of Samples
+    formula (Cui et al. 2019, CVPR).
 
-    For a class with n samples, effective number E_n = (1 - β^n) / (1 - β).
-    We treat li_density * H * W as the effective pixel count and normalise
-    so that a reference density of 0.05 (5% LI pixels) gives base_weight.
+    E_n = (1 - β^n) / (1 - β)
 
-    Properties:
-      - Sparse sequences (density → 0) get weight → max_weight
-      - Dense sequences  (density → 1) get weight → min_weight
-      - Sequences with zero LI density get weight = 1.0 (background)
-        because the model should still learn to predict zero residual there
-      - Smooth, no blow-up (unlike pure inverse frequency)
-
-    Args:
-        li_density : (B,) tensor, fraction of LI pixels per sample
-        base_weight: weight assigned at reference_density=0.05
-        beta       : smoothing factor (0.9999 recommended, Cui et al.)
-        min_weight : floor — dense sequences still upweighted vs non-LI channels
-        max_weight : ceiling — prevents extreme gradients on tiny events
-
-    Returns:
-        (B,) tensor of per-sample li_weight values
+    Weight is normalised so that reference density 0.05 → base_weight.
+    Zero-density sequences receive weight=1.0 (learn to predict zero residual).
     """
-    # Approximate pixel count from density (H*W implicit in density)
-    # Use density directly as the effective count proxy
-    eps = 1e-6
-    n   = li_density.clamp(min=eps)
-
-    # Effective number formula
-    E_n = (1.0 - beta ** n) / (1.0 - beta)
-
-    # Reference: E_n at density=0.05
+    eps   = 1e-6
+    n     = li_density.clamp(min=eps)
+    E_n   = (1.0 - beta ** n)    / (1.0 - beta)
     E_ref = (1.0 - beta ** 0.05) / (1.0 - beta)
-
-    # Scale so reference density → base_weight
-    weight = base_weight * (E_ref / E_n)
-
-    # Zero-density sequences: no LI in frame, use background weight of 1.0
-    # The model should still learn to predict zero residual here
-    weight = torch.where(li_density < eps, torch.ones_like(weight), weight)
-
-    return weight.clamp(min_weight, max_weight)
+    w     = base_weight * (E_ref / E_n)
+    w     = torch.where(li_density < eps, torch.ones_like(w), w)
+    return w.clamp(min_weight, max_weight)
 
 
 def channel_weighted_mse(
-    pred: torch.Tensor,
-    target: torch.Tensor,
-    ch_mask: torch.Tensor,
-    li_weight: Union[float, torch.Tensor] = 3.0,
-    li_idx: int = 1,        # LI is channel index 1  (ir=0, li=1, ch0=2, ...)
+    pred:      torch.Tensor,
+    target:    torch.Tensor,
+    ch_mask:   torch.Tensor,
+    li_weight: Union[float, torch.Tensor] = 30.0,
+    li_idx:    int = 1,
 ) -> torch.Tensor:
     """
-    MSE with:
-      - masking of absent channels
-      - upweighting LI channel (sparse but critical)
-
-    li_weight can be:
-      - float : same weight for all samples in the batch (original behaviour)
-      - (B,) Tensor : per-sample weight (used with dynamic li_weight)
-
-    pred, target: (B, C, H, W)
-    ch_mask: (B, C)
+    Masked MSE with per-channel (and optionally per-sample) LI upweighting.
+    pred, target : (B, C, H, W)
+    ch_mask      : (B, C)
+    li_weight    : scalar or (B,) tensor
     """
-    weights = torch.ones_like(ch_mask)   # (B, C)
-
+    weights = torch.ones_like(ch_mask)
     if isinstance(li_weight, torch.Tensor):
-        # Per-sample: (B,) → broadcast to (B, 1) for channel assignment
         weights[:, li_idx] = li_weight
     else:
         weights[:, li_idx] = li_weight
 
-    per_pixel  = (pred - target) ** 2                    # (B, C, H, W)
-    mask_4d    = ch_mask[:, :, None, None]
-    weight_4d  = weights[:, :, None, None]
-
-    loss = (per_pixel * mask_4d * weight_4d).sum() / (mask_4d * weight_4d).sum().clamp(min=1)
-    return loss
+    per_px  = (pred - target) ** 2
+    mask_4d = ch_mask[:, :, None, None]
+    w_4d    = weights[:, :, None, None]
+    return (per_px * mask_4d * w_4d).sum() / (mask_4d * w_4d).sum().clamp(min=1)
 
 
-def edm_training_loss(
-    denoiser: MultiStepDenoiser,
-    schedule: EDMSchedule,
-    batch: dict,
-    device: torch.device,
-    cfg_drop_prob: float = 0.15,
-    spectral_weight: float = 0.1,
-    li_weight: float = 3.0,
-    li_weight_beta: float = 0.9999,   # Cui et al. 2019 beta for effective number
+def asymmetric_li_loss(
+    pred:      torch.Tensor,
+    target:    torch.Tensor,
+    alpha:     float = 0.3,
+    li_idx:    int   = 1,
+    threshold: float = 1.0 / 255.0,
 ) -> torch.Tensor:
     """
-    Full EDM training loss with:
-      - random lead step sampling
-      - classifier-free guidance dropout
-      - weighted MSE + spectral loss
+    Asymmetric pixel loss for the LI channel.
+
+    For pixels where GT=0 (no lightning), false positives are penalised
+    by factor alpha < 1 — making the model more spatially selective early
+    in training, directly reducing FAR.
+
+    For pixels where GT>0 (lightning present), standard MSE applies.
+
+    As alpha → 1 this becomes standard MSE.
+
+    Following Gao et al. 2022 (EarthFormer) applied to convective nowcasting.
+
+    Args:
+        pred, target : (B, C, H, W) — denoised prediction and clean target
+        alpha        : FP cost relative to FN. alpha=0.3 → FP penalised
+                       at 30% of FN cost. Annealed to 1.0 during training.
+        li_idx       : index of LI channel
+        threshold    : physical-space threshold for GT=0 (default 1/255)
     """
-    context    = batch["context"].to(device)      # (B, T_in, C, H, W)
-    target     = batch["target"].to(device)       # (B, T_out, C, H, W)
-    tgt_mask   = batch["tgt_mask"].to(device)     # (B, T_out, C)
-    ctx_mask   = batch["ctx_mask"].to(device)     # (B, T_in, C)
+    pred_li   = pred[:, li_idx]      # (B, H, W)
+    target_li = target[:, li_idx]
+
+    gt_pos  = (target_li >= threshold).float()   # 1 where lightning present
+    gt_neg  = 1.0 - gt_pos
+
+    sq_err  = (pred_li - target_li) ** 2
+
+    # FP: model predicts non-zero where GT=0 (penalised by alpha)
+    # FN: model predicts zero where GT>0  (full penalty)
+    loss = (alpha * gt_neg + gt_pos) * sq_err
+    return loss.mean()
+
+
+def neighbourhood_li_loss(
+    pred:      torch.Tensor,
+    target:    torch.Tensor,
+    li_idx:    int         = 1,
+    scales:    List[int]   = [5, 11],
+) -> torch.Tensor:
+    """
+    Neighbourhood consistency loss for the LI channel.
+
+    Penalises spatial displacement by comparing spatially smoothed predictions
+    to smoothed targets at multiple neighbourhood scales. A model that places
+    lightning in the right general region but slightly wrong pixel position
+    will still be penalised by standard MSE; this loss rewards spatial proximity.
+
+    L_nbr = Σ_k ||avg_pool(pred_li, k) - avg_pool(target_li, k)||²
+
+    Following Zhang et al. 2023 (NowcastNet) spatial consistency loss.
+
+    Args:
+        scales : kernel sizes for avg_pool2d (in pixels).
+                 k=5 ≈ 20km, k=11 ≈ 44km at 4km/pixel resolution.
+    """
+    pred_li   = pred[:, li_idx:li_idx+1]      # (B, 1, H, W)
+    target_li = target[:, li_idx:li_idx+1]
+
+    loss = 0.0
+    for k in scales:
+        pad        = k // 2
+        pred_sm    = F.avg_pool2d(pred_li,   k, stride=1, padding=pad)
+        target_sm  = F.avg_pool2d(target_li, k, stride=1, padding=pad)
+        loss       = loss + F.mse_loss(pred_sm, target_sm)
+    return loss / len(scales)
+
+
+def spectral_loss(
+    pred:     torch.Tensor,
+    target:   torch.Tensor,
+    ch_mask:  torch.Tensor,
+    li_idx:   int = 1,
+) -> torch.Tensor:
+    """
+    FFT magnitude spectrum loss applied to non-LI channels only.
+
+    Preserves high-frequency cloud texture (sharpness) without
+    sharpening LI false positives.
+
+    pred, target : (B, C, H, W)
+    ch_mask      : (B, C)
+    """
+    loss  = 0.0
+    count = 0
+    C = pred.shape[1]
+    for ci in range(C):
+        if ci == li_idx:
+            continue   # skip LI
+        mask = ch_mask[:, ci].float()
+        if mask.sum() < 1:
+            continue
+        p_fft = torch.fft.rfft2(pred[:, ci])
+        t_fft = torch.fft.rfft2(target[:, ci])
+        err   = ((p_fft.abs() - t_fft.abs()) ** 2) * mask[:, None, None]
+        loss  = loss + err.mean()
+        count += 1
+    return loss / max(count, 1)
+
+
+def training_loss(
+    denoiser:       MultiStepDenoiser,
+    schedule:       EDMSchedule,
+    batch:          dict,
+    device:         torch.device,
+    cfg_drop_prob:  float = 0.15,
+    # Channel weighting
+    li_weight:      float = 30.0,
+    li_weight_beta: float = 0.9999,
+    # Asymmetric LI loss (Gao et al. 2022)
+    asym_weight:    float = 1.0,
+    asym_alpha:     float = 0.3,
+    # Neighbourhood spatial loss (Zhang et al. 2023)
+    nbr_weight:     float = 0.5,
+    nbr_scales:     List[int] = [5, 11],
+    # Spectral loss on cloud channels
+    spectral_weight: float = 0.1,
+) -> torch.Tensor:
+    """
+    Composite training loss:
+
+        L = L_denoise  +  λ_a · L_asymmetric  +  λ_n · L_neighbourhood  +  λ_s · L_spectral
+
+    L_denoise      : EDM-weighted MSE with dynamic per-sample LI channel weight
+    L_asymmetric   : asymmetric FP/FN pixel loss for LI (reduces FAR)
+    L_neighbourhood: spatial consistency loss at multiple scales (improves FSS)
+    L_spectral     : FFT magnitude loss on IR/cloud channels only (preserves texture)
+    """
+    context  = batch["context"].to(device)     # (B, T_in, C, H, W)
+    target   = batch["target"].to(device)      # (B, T_out, C, H, W) residuals
+    tgt_mask = batch["tgt_mask"].to(device)    # (B, T_out, C)
 
     B, T_out, C, H, W = target.shape
+    li_idx = 1   # ir=0, li=1, ch0=2, ch1=3 (consistent with channel ordering)
 
-    # Sample random lead step for each batch item
+    # Sample one random lead step per batch item
     lead_idx = torch.randint(0, T_out, (B,), device=device)
-    y        = target[torch.arange(B), lead_idx]          # (B, C, H, W)
-    ch_mask  = tgt_mask[torch.arange(B), lead_idx]        # (B, C)
+    y        = target[torch.arange(B), lead_idx]       # (B, C, H, W)
+    ch_mask  = tgt_mask[torch.arange(B), lead_idx]     # (B, C)
 
-    # Sample noise level
-    sigma = schedule.sample_sigma(B, device)
-
-    # Add noise
-    noise   = torch.randn_like(y)
-    x_noisy = y + noise * sigma[:, None, None, None]
+    # Sample noise level σ ~ lognormal
+    sigma   = schedule.sample_sigma(B, device)
+    x_noisy = y + torch.randn_like(y) * sigma[:, None, None, None]
 
     # CFG: randomly null-condition context
     if cfg_drop_prob > 0:
-        drop = (torch.rand(B, device=device) < cfg_drop_prob)
-        context_drop = context.clone()
-        context_drop[drop] = 0.0   # zero out context for dropped samples
-        ctx_used = context_drop
+        drop     = torch.rand(B, device=device) < cfg_drop_prob
+        ctx_used = context.clone()
+        ctx_used[drop] = 0.0
     else:
         ctx_used = context
 
-    # Forward
+    # Forward pass
     pred = denoiser(x_noisy, sigma, ctx_used, ch_mask, lead_idx)
 
-    # Loss weight λ(σ)
+    # ── L_denoise: EDM-weighted MSE with dynamic LI channel weight ────
     lw = schedule.edm_loss_weight(sigma)[:, None, None, None]
 
-    # Dynamic per-sample li_weight using Cui et al. (2019) effective number formula.
-    # li_density is (B,) from the dataset; absent → use scalar base weight.
     if "li_density" in batch:
-        li_density = batch["li_density"].to(device)   # (B,)
-        dyn_weight = effective_li_weight(
-            li_density,
+        dyn_w = effective_li_weight(
+            batch["li_density"].to(device),
             base_weight = li_weight,
             beta        = li_weight_beta,
         )
     else:
-        dyn_weight = li_weight   # fallback: scalar (original behaviour)
+        dyn_w = li_weight
 
-    mse  = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, dyn_weight)
-    # spec = spectral_loss(pred, y, spectral_weight)
-    # return mse + spec
-    return mse
+    L_denoise = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, dyn_w)
+
+    # ── L_asymmetric: reduces FAR by penalising FP less than FN ──────
+    L_asym = asymmetric_li_loss(pred, y, alpha=asym_alpha, li_idx=li_idx)
+
+    # ── L_neighbourhood: spatial consistency at 2 scales ─────────────
+    L_nbr = neighbourhood_li_loss(pred, y, li_idx=li_idx, scales=nbr_scales)
+
+    # ── L_spectral: FFT on cloud channels only ────────────────────────
+    L_spec = spectral_loss(pred, y, ch_mask, li_idx=li_idx)
+
+    return (L_denoise
+            + asym_weight    * L_asym
+            + nbr_weight     * L_nbr
+            + spectral_weight * L_spec)

@@ -54,7 +54,7 @@ except ImportError:
 from dataset import make_dataloaders
 from model import (
     UNet, EDMPrecond, MultiStepDenoiser,
-    EDMSchedule, edm_training_loss,
+    EDMSchedule, training_loss,
 )
 from evaluate import evaluate_epoch, fast_val_metrics
 
@@ -123,7 +123,12 @@ def ddp_active() -> bool:
 # ===================================================================
 
 def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDenoiser:
-    in_ch  = C * (T_in + 2)   # noisy + context + mask
+    # Input channels:
+    #   noisy residual   : C
+    #   context frames   : T_in * C_ctx  where C_ctx = C+1 if binary_li_ctx else C
+    #   channel mask     : C
+    C_ctx  = C + 1 if args.binary_li_ctx else C
+    in_ch  = C + T_in * C_ctx + C
     unet   = UNet(
         in_channels      = in_ch,
         out_channels     = C,
@@ -196,6 +201,7 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
         train_val_split   = args.train_val_split,
         oversample_factor  = args.oversample_factor,
         density_percentile = args.density_percentile,
+        binary_li_ctx      = args.binary_li_ctx,
     )
 
     if not ddp_active() or world_size == 1:
@@ -299,78 +305,19 @@ def train(args):
         opt.load_state_dict(ckpt["opt"])
         if main and ema is not None and "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
-
-        if args.extend:
-            # --extend: start a fresh training phase from the BEST checkpoint.
-            #
-            # Loading strategy:
-            #   model + ema  <- best.pt   (best generalisation, not last epoch)
-            #   opt          <- best.pt   (Adam moments from the best point)
-            #
-            # best.pt is preferred over latest.pt because at the end of a
-            # cosine cycle the model trained at eta_min may be slightly worse
-            # than the best validation checkpoint.
-            #
-            # After loading we:
-            #   - reset epoch counter to 0
-            #   - patch param_groups["lr"] back to args.lr  (load_state_dict
-            #     restores the stale LR from the checkpoint, typically ~lr*0.01)
-            #   - reset best_val so a new best.pt is written for this phase
-            #   - redirect output to <output_dir>_ext1 (then _ext2, …)
-
-            best_path = os.path.join(
-                os.path.dirname(ckpt_path), "best.pt"
-            )
-            if os.path.exists(best_path):
-                best_ckpt = torch.load(best_path, map_location=device)
-                raw_model.load_state_dict(best_ckpt["model"])
-                if main and ema is not None and "ema" in best_ckpt:
-                    ema.load_state_dict(best_ckpt["ema"])
-                if "opt" in best_ckpt:
-                    opt.load_state_dict(best_ckpt["opt"])
-                src_label = "best.pt"
-            else:
-                # best.pt missing (e.g. val was never run) — fall back to
-                # the already-loaded latest.pt weights/opt
-                src_label = "latest.pt (best.pt not found)"
-
-            start_epoch = 0
-            best_val    = float("inf")
-
-            # Patch LR: load_state_dict restores the stale end-of-run LR
-            # (~lr*0.01).  Reset every param group to the requested peak LR
-            # so the new cosine cycle starts correctly.
-            for pg in opt.param_groups:
-                pg["lr"] = args.lr
-
-            import re
-            base = args.output_dir.rstrip("/")
-            m    = re.match(r"^(.*?)(_ext(\d+))?$", base)
-            prev = int(m.group(3) or 0)
-            args.output_dir = f"{m.group(1)}_ext{prev + 1}"
-            os.makedirs(args.output_dir, exist_ok=True)
-            ckpt_path = os.path.join(args.output_dir, "latest.pt")
-            if main:
-                logger.info(
-                    f"Extend mode: weights from {src_label}, "
-                    f"Adam moments kept, LR reset to {args.lr}, "
-                    f"new output dir: {args.output_dir}"
+        start_epoch = ckpt["epoch"] + 1
+        best_val    = ckpt.get("best_val", best_val)
+        if main:
+            logger.info(f"Resumed from epoch {start_epoch - 1} "
+                        f"(continuing to epoch {args.epochs - 1})")
+            if start_epoch >= args.epochs:
+                logger.warning(
+                    f"start_epoch ({start_epoch}) >= args.epochs ({args.epochs}). "
+                    "Nothing to do — did you forget to increase --epochs?"
                 )
-        else:
-            # Normal resume: continue epoch counter from checkpoint.
-            start_epoch = ckpt["epoch"] + 1
-            best_val    = ckpt.get("best_val", best_val)
-            if main:
-                logger.info(f"Resumed from epoch {start_epoch - 1} "
-                            f"(continuing to epoch {args.epochs - 1})")
-                if start_epoch >= args.epochs:
-                    logger.warning(
-                        f"start_epoch ({start_epoch}) >= args.epochs ({args.epochs}). "
-                        "Nothing to do — did you forget to increase --epochs?"
-                    )
 
     # Build scheduler AFTER resume.
-    # In extend mode start_epoch=0 so this is identical to a fresh run.
+    # last_epoch=-1 = fresh run, >0 = resume mid-curve.
     # In normal resume last_epoch>0 so the cosine curve continues correctly.
     sched = CosineAnnealingLR(
         opt,
@@ -378,29 +325,12 @@ def train(args):
         eta_min    = args.lr * 0.01,
         last_epoch = start_epoch - 1,   # -1 = fresh; >0 = mid-curve resume
     )
-    # Restore scheduler state only for plain resume (not extend).
-    if args.resume and not args.extend and os.path.exists(ckpt_path) and "sched" in ckpt:
+    if args.resume and os.path.exists(ckpt_path) and "sched" in ckpt:
         sched.load_state_dict(ckpt["sched"])
 
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
         wandb.init(project=args.wandb_project, name=os.path.basename(args.output_dir.rstrip("/")), config=vars(args))
-
-    # ----- Baseline validation (extend mode only) -----
-    # Both ranks run fast_val_metrics (all_reduce inside requires all ranks).
-    # Only rank 0 logs the result.
-    if args.extend:
-        if main:
-            logger.info("Extend mode: running baseline validation before training ...")
-        baseline_metrics = fast_val_metrics(
-            raw_model, val_loader, schedule, device,
-            channels    = channels,
-            val_samples = args.val_samples,
-        )
-        if main:
-            logger.info(f"  Baseline (pre-extend): {baseline_metrics}")
-            if HAS_WANDB and args.wandb_project:
-                wandb.log({"epoch": -1, "phase": "baseline", **baseline_metrics})
 
     # ----- Main loop -----
     epoch_bar = tqdm(
@@ -435,15 +365,19 @@ def train(args):
             opt.zero_grad(set_to_none=True)
 
             with autocast('cuda', enabled=args.amp):
-                loss = edm_training_loss(
-                    denoiser        = model,
-                    schedule        = schedule,
-                    batch           = batch,
-                    device          = device,
-                    cfg_drop_prob   = args.cfg_drop_prob,
-                    spectral_weight = args.spectral_weight,
-                    li_weight       = args.li_weight,
-                    li_weight_beta  = args.li_weight_beta,
+                loss = training_loss(
+                    denoiser         = model,
+                    schedule         = schedule,
+                    batch            = batch,
+                    device           = device,
+                    cfg_drop_prob    = args.cfg_drop_prob,
+                    li_weight        = args.li_weight,
+                    li_weight_beta   = args.li_weight_beta,
+                    asym_weight      = args.asym_weight,
+                    asym_alpha       = args.asym_alpha,
+                    nbr_weight       = args.nbr_weight,
+                    nbr_scales       = args.nbr_scales,
+                    spectral_weight  = args.spectral_weight,
                 )
 
             scaler.scale(loss).backward()
