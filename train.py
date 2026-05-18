@@ -270,13 +270,15 @@ def train(args):
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
         logger.info(f"Model params: {n_params:.1f}M")
 
-    # Wrap with DDP — find_unused_parameters=False is faster when all params are used
+    # find_unused_parameters=True required because attention layers at specific
+    # resolutions may not activate for every batch (e.g. when spatial dims
+    # don't pass through attn_resolutions). Small performance cost is acceptable.
     if ddp_active() and world_size > 1:
         model = DDP(
             model,
             device_ids          = [local_rank],
             output_device       = local_rank,
-            find_unused_parameters = False,
+            find_unused_parameters = True,
         )
 
     # EMA lives only on rank 0 (no need to sync across GPUs)
