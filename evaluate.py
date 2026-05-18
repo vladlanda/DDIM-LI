@@ -357,6 +357,55 @@ def crps_decomposition(
     return results
 
 
+def fss(
+    pred_bin:  np.ndarray,   # (H, W) binary forecast field
+    obs_bin:   np.ndarray,   # (H, W) binary observation field
+    scale:     int = 1,
+) -> float:
+    """
+    Fractions Skill Score (Roberts & Lean 2008).
+
+    FSS = 1 - MSE(smoothed_pred, smoothed_obs) / MSE_ref
+    where MSE_ref = mean(smoothed_pred²) + mean(smoothed_obs²)
+
+    scale: neighbourhood half-width in pixels.
+           FSS at scale=1 is pixel-level; larger scale forgives displacement.
+    """
+    from scipy.ndimage import uniform_filter
+    if scale <= 1:
+        p_frac = pred_bin.astype(float)
+        o_frac = obs_bin.astype(float)
+    else:
+        size   = 2 * scale + 1
+        p_frac = uniform_filter(pred_bin.astype(float), size=size)
+        o_frac = uniform_filter(obs_bin.astype(float),  size=size)
+
+    mse     = float(np.mean((p_frac - o_frac) ** 2))
+    mse_ref = float(np.mean(p_frac ** 2) + np.mean(o_frac ** 2))
+    if mse_ref < 1e-10:
+        return 1.0
+    return float(1.0 - mse / mse_ref)
+
+
+def spread_skill(
+    ens_np: np.ndarray,   # (M, H, W) ensemble members
+    tgt_np: np.ndarray,   # (H, W)    observation
+) -> float:
+    """
+    Spread-skill ratio: std(ensemble) / RMSE(ensemble_mean, obs).
+
+    A well-calibrated ensemble has ratio ≈ 1.
+    Ratio < 1: under-dispersive (overconfident).
+    Ratio > 1: over-dispersive.
+
+    Following Fortin et al. 2014, MWR.
+    """
+    spread = float(np.std(ens_np, axis=0).mean())
+    skill  = float(np.sqrt(np.mean((ens_np.mean(axis=0) - tgt_np) ** 2)))
+    return spread / (skill + 1e-8)
+
+
+
 def evaluate_epoch(
     model:        MultiStepDenoiser,
     val_loader:   DataLoader,
