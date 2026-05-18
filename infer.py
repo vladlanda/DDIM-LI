@@ -52,7 +52,7 @@ def load_model(checkpoint: str, device: torch.device):
     C        = len(channels)
 
     unet    = UNet(
-        in_channels      = C * (T_in + 2),
+        in_channels      = C + T_in * (C + 1 if ckpt_args.get("binary_li_ctx", False) else C) + C,
         out_channels     = C,
         base_channels    = args["base_channels"],
         channel_mults    = tuple(args["channel_mults"]),

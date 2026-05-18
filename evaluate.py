@@ -1407,8 +1407,14 @@ def run_test_evaluation(args):
     dt_min    = ckpt_args["dt_min"]
     C         = len(channels)
 
+    # Reconstruct input channels exactly as in train.py build_model
+    # binary_li_ctx adds one extra channel per context frame
+    binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
+    C_ctx  = C + 1 if binary_li_ctx else C
+    in_ch  = C + T_in * C_ctx + C   # noisy + context + mask
+
     unet = UNet(
-        in_channels      = C * (T_in + 2),
+        in_channels      = in_ch,
         out_channels     = C,
         base_channels    = ckpt_args["base_channels"],
         channel_mults    = tuple(ckpt_args["channel_mults"]),
