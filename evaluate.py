@@ -63,6 +63,8 @@ def generate_ensemble(
     n_members:  int   = 10,
     num_steps:  int   = 20,
     cfg_scale:  float = 1.5,
+    S_churn:    float = 40.0,
+    S_noise:    float = 1.003,
 ) -> torch.Tensor:
     """
     Returns ensemble of shape (B, M, T_out, C, H, W).
@@ -99,9 +101,11 @@ def generate_ensemble(
 
             pred = edm_sampler(
                 denoiser_fn, (B, C, H, W), device,
-                num_steps=num_steps,
-                sigma_min=model.precond.sigma_data * 0.01,
-                sigma_max=80.0,
+                num_steps = num_steps,
+                sigma_min = model.precond.sigma_data * 0.01,
+                sigma_max = 80.0,
+                S_churn   = S_churn,
+                S_noise   = S_noise,
             )
             all_steps.append(pred)
 
