@@ -107,5 +107,5 @@ n_members:    1
 cfg_scale:    1.5
 
 output_dir:      outputs/nonelbo_v2
-resume:          true   # fresh start
+resume:          false
 wandb_project:   "DDIM-LI"
