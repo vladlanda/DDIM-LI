@@ -337,7 +337,7 @@ class MultiStepDenoiser(nn.Module):
         lead_idx: torch.Tensor,
     ) -> torch.Tensor:
         B, T_in, C_ctx, H, W = context.shape
-        ctx_flat  = context.view(B, T_in * C_ctx, H, W)
+        ctx_flat  = context.reshape(B, T_in * C_ctx, H, W)
         lead_time = (lead_idx.float() + 1) * self.dt_min
         return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
 
