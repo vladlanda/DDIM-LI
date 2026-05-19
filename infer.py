@@ -72,9 +72,10 @@ def load_model(checkpoint: str, device: torch.device):
 # Main
 # -------------------------------------------------------------------
 def run_inference(args):
-    # Force CPU — diagnostic needs only 3 forward passes, GPU may be occupied
+    # Force CPU — set CUDA_VISIBLE_DEVICES="" before any CUDA init
+    import os as _os
+    _os.environ["CUDA_VISIBLE_DEVICES"] = ""
     device = torch.device("cpu")
-    torch.cuda.is_available = lambda: False  # prevent any accidental GPU use
     logger.info(f"Device: {device}")
 
     model, channels, stats, T_in, T_out, dt_min = load_model(args.checkpoint, device)
