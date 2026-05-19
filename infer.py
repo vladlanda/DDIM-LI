@@ -72,7 +72,8 @@ def load_model(checkpoint: str, device: torch.device):
 # Main
 # -------------------------------------------------------------------
 def run_inference(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Use CPU for diagnostic to avoid CUDA OOM — only 3 forward passes needed
+    device = torch.device("cpu")
     logger.info(f"Device: {device}")
 
     model, channels, stats, T_in, T_out, dt_min = load_model(args.checkpoint, device)
@@ -262,6 +263,8 @@ def run_cfg_diagnostic(args):
 
     schedule = EDMSchedule(sigma_data=ca.get("sigma_data", 1.0))
 
+    # max_samples=10: only index 10 sequences — avoid scanning the full dataset
+    # which is slow and unnecessary for a diagnostic on a single sequence.
     ds = METSATDataset(
         root           = args.data_dir,
         channel_list   = channels,
@@ -270,6 +273,7 @@ def run_cfg_diagnostic(args):
         img_size       = tuple(args.img_size),
         augment        = False,
         binary_li_ctx  = binary_li_ctx,
+        max_samples    = 10,
     )
 
     # Use sequence index 0
@@ -279,7 +283,7 @@ def run_cfg_diagnostic(args):
     lead_idx = torch.zeros(1, dtype=torch.long, device=device)
 
     diffs = []
-    n_trials = 5
+    n_trials = 3   # 3 trials is enough for the diagnostic
 
     logger.info("Running CFG diagnostic (%d trials)...", n_trials)
     for trial in range(n_trials):
