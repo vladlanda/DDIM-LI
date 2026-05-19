@@ -124,10 +124,13 @@ def ddp_active() -> bool:
 
 def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDenoiser:
     # Input channels:
-    #   noisy residual   : C
-    #   context frames   : T_in * C_ctx  where C_ctx = C+1 if binary_li_ctx else C
+    #   noisy residual   : C  (all data channels)
+    #   context frames   : T_in * C_ctx
+    #     C_ctx = len(ctx_channels) or C, +1 if binary_li_ctx and LI in ctx
     #   channel mask     : C
-    C_ctx  = C + 1 if args.binary_li_ctx else C
+    C_ctx_sel = len(args.ctx_channels) if args.ctx_channels else C
+    _li_in_ctx = (args.ctx_channels is None) or ("li" in args.ctx_channels)
+    C_ctx  = C_ctx_sel + 1 if (args.binary_li_ctx and _li_in_ctx) else C_ctx_sel
     in_ch  = C + T_in * C_ctx + C
     unet   = UNet(
         in_channels      = in_ch,
@@ -202,6 +205,7 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
         oversample_factor  = args.oversample_factor,
         density_percentile = args.density_percentile,
         binary_li_ctx      = args.binary_li_ctx,
+        ctx_channels       = args.ctx_channels,
     )
 
     if not ddp_active() or world_size == 1:

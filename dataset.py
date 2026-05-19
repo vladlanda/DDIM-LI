@@ -308,6 +308,7 @@ class METSATDataset(Dataset):
         augment: bool = True,
         max_samples: Optional[int] = None,
         binary_li_ctx: bool = True,
+        ctx_channels: Optional[List[str]] = None,
     ):
         self.root         = root
         self.channel_list = channel_list
@@ -351,7 +352,14 @@ class METSATDataset(Dataset):
         self._norm_std  = np.array([
             self.stats[ch]["std"]  if ch in self.stats else 0.5
             for ch in channel_list], dtype=np.float32)
-        self.binary_li_ctx = binary_li_ctx
+        self.binary_li_ctx  = binary_li_ctx
+        self.ctx_channels   = ctx_channels
+        # ctx_idx: indices of channels to include in context
+        if ctx_channels is not None:
+            self.ctx_idx = [channel_list.index(c) for c in ctx_channels
+                            if c in channel_list]
+        else:
+            self.ctx_idx = list(range(len(channel_list)))
         self._cbrt_mask = np.array([
             self.stats[ch]["transform"] == "cbrt" if ch in self.stats else False
             for ch in channel_list])
@@ -421,20 +429,27 @@ class METSATDataset(Dataset):
         else:
             li_density = 0.0
 
+        # Apply ctx_channels selection — subset context to requested channels only.
+        # If ctx_channels=["ir","ch0","ch1"] then LI is excluded from context,
+        # forcing the model to predict LI purely from cloud structure.
+        ctx = context[:, self.ctx_idx, :, :]   # (T_in, C_ctx_sel, H, W)
+
         # Binary LI context: append (li >= 1/255) as extra channel per context frame.
-        # Gives the model an explicit spatial prior on where lightning was occurring.
+        # Only appended if LI is included in ctx_channels.
         # Following Ravuri et al. 2021 (DGMR) explicit rain mask conditioning.
-        if self.binary_li_ctx and li_idx is not None:
-            li_norm = context[:, li_idx]                              # (T_in, H, W)
+        _li_in_ctx = (li_idx is not None and li_idx in self.ctx_idx)
+        if self.binary_li_ctx and _li_in_ctx:
+            _li_ctx_pos = self.ctx_idx.index(li_idx)
+            li_norm = ctx[:, _li_ctx_pos]                             # (T_in, H, W)
             li_phys = li_norm * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
             li_bin  = (li_phys >= 1.0 / 255.0).astype(np.float32)    # (T_in, H, W)
             context_out = np.concatenate(
-                [context, li_bin[:, None, :, :]], axis=1             # (T_in, C+1, H, W)
+                [ctx, li_bin[:, None, :, :]], axis=1                  # (T_in, C_ctx+1, H, W)
             )
         else:
-            context_out = context
+            context_out = ctx
 
         return {
             "context":    torch.from_numpy(context_out),
@@ -571,6 +586,7 @@ def make_dataloaders(
     oversample_factor:  float = 5.0,
     density_percentile: float = 75.0,
     binary_li_ctx:      bool  = True,
+    ctx_channels:       Optional[List[str]] = None,
 ):
     """
     Builds train and validation loaders from train_roots only.

@@ -105,6 +105,9 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--density_percentile", type=float, default=75.0,
                         help="Sequences above this LI density percentile are oversampled.")
     # -- Binary LI context channel --
+    parser.add_argument("--ctx_channels",    nargs="+",  default=None,
+                        help="Channels to include in context. Default=None uses all. "
+                             "Example: --ctx_channels ir ch0 ch1 excludes LI from context.")
     parser.add_argument("--binary_li_ctx",   type=_bool, default=True,
                         help="Add a binary (>=1/255) LI channel to context frames. "
                              "Gives the model an explicit spatial prior on where "

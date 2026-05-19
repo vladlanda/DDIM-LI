@@ -3,7 +3,7 @@
 # ============================================================
 # Usage:
 #   python evaluate.py --config configs/evaluate.yaml
-#   python evaluate.py --config configs/evaluate.yaml --S_churn 80  # CLI overrides yaml
+#   python evaluate.py --config configs/evaluate.yaml --S_churn 80
 
 # ----------------------------------------------------------
 # Paths
@@ -21,18 +21,8 @@ output_dir:   outputs/nonelbo_v1/eval
 n_members:    32
 cfg_scale:    1.5
 num_steps:    20
-S_churn:      40.0
-S_noise:      1.003
-num_steps:    20
-
-# EDM stochastic sampler (Algorithm 2, Karras et al. 2022)
-# S_churn=0  → deterministic DDIM (fastest, least diverse)
-# S_churn=40 → moderate stochasticity (recommended)
-# S_churn=80 → high stochasticity
 S_churn:      60.0
 S_noise:      1.003
-
-
 
 # ----------------------------------------------------------
 # Metrics

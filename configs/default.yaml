@@ -92,6 +92,11 @@ density_percentile: 75.0   # 75th percentile LI density threshold
 # Appends (li >= 1/255) as extra channel to each context frame
 binary_li_ctx:   true
 
+# ctx_channels: which channels to include in context (null = all channels)
+# To exclude LI from context and force prediction from IR alone:
+#   ctx_channels: [ir, ch0, ch1]
+ctx_channels:    null
+
 # ----------------------------------------------------------
 # Validation & logging
 # ----------------------------------------------------------

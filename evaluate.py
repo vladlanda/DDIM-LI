@@ -1415,9 +1415,11 @@ def run_test_evaluation(args):
     C         = len(channels)
 
     # Reconstruct input channels exactly as in train.py build_model
-    # binary_li_ctx adds one extra channel per context frame
     binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
-    C_ctx  = C + 1 if binary_li_ctx else C
+    ctx_channels  = ckpt_args.get("ctx_channels", None)
+    C_ctx_sel     = len(ctx_channels) if ctx_channels else C
+    _li_in_ctx    = (ctx_channels is None) or ("li" in ctx_channels)
+    C_ctx  = C_ctx_sel + 1 if (binary_li_ctx and _li_in_ctx) else C_ctx_sel
     in_ch  = C + T_in * C_ctx + C   # noisy + context + mask
 
     unet = UNet(
