@@ -72,8 +72,9 @@ def load_model(checkpoint: str, device: torch.device):
 # Main
 # -------------------------------------------------------------------
 def run_inference(args):
-    # Use CPU for diagnostic to avoid CUDA OOM — only 3 forward passes needed
+    # Force CPU — diagnostic needs only 3 forward passes, GPU may be occupied
     device = torch.device("cpu")
+    torch.cuda.is_available = lambda: False  # prevent any accidental GPU use
     logger.info(f"Device: {device}")
 
     model, channels, stats, T_in, T_out, dt_min = load_model(args.checkpoint, device)
@@ -239,7 +240,7 @@ def run_cfg_diagnostic(args):
     logger = logging.getLogger(__name__)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt   = torch.load(args.checkpoint, map_location=device)
+    ckpt   = torch.load(args.checkpoint, map_location="cpu")
     ca     = ckpt["args"]
 
     channels = ca["channels"]
