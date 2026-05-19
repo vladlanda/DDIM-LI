@@ -240,7 +240,8 @@ def run_cfg_diagnostic(args):
                         format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger(__name__)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Force CPU — CUDA may be fully occupied by training process
+    device = torch.device("cpu")
     ckpt   = torch.load(args.checkpoint, map_location="cpu")
     ca     = ckpt["args"]
 
@@ -280,9 +281,9 @@ def run_cfg_diagnostic(args):
 
     # Use sequence index 0
     sample   = ds[0]
-    ctx      = sample["context"].unsqueeze(0).to(device)   # (1, T_in, C_ctx, H, W)
-    ch_mask  = sample["tgt_mask"][0].unsqueeze(0).to(device)  # (1, C)
-    lead_idx = torch.zeros(1, dtype=torch.long, device=device)
+    ctx      = sample["context"].unsqueeze(0)    # (1, T_in, C_ctx, H, W) — CPU
+    ch_mask  = sample["tgt_mask"][0].unsqueeze(0)  # (1, C) — CPU
+    lead_idx = torch.zeros(1, dtype=torch.long)
 
     diffs = []
     n_trials = 3   # 3 trials is enough for the diagnostic
@@ -300,7 +301,8 @@ def run_cfg_diagnostic(args):
                 return uncond + _scale * (cond - uncond)
 
             pred = edm_sampler(
-                denoiser_fn, (1, C, ctx.shape[-2], ctx.shape[-1]), device,
+                denoiser_fn, (1, C, ctx.shape[-2], ctx.shape[-1]),
+                torch.device("cpu"),
                 num_steps = args.num_steps,
                 sigma_min = schedule.sigma_data * 0.01,
                 sigma_max = 80.0,
