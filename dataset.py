@@ -608,6 +608,8 @@ def make_dataloaders(
         T_in=T_in, T_out=T_out, img_size=img_size,
         stat_path=stat_path, augment=False,
         max_samples=max_samples,
+        binary_li_ctx=binary_li_ctx,
+        ctx_channels=ctx_channels,
     )
     shared_stats = full_ds.datasets[0].stats
 
