@@ -9,12 +9,12 @@
 # Data
 # ----------------------------------------------------------
 train_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
+  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
+  # - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
 
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
+  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
 
 # Temporal split — first 80% train, last 20% validation (no leakage)
 train_val_split: 0.8
@@ -53,7 +53,7 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         500
+epochs:         600
 batch_size:     32
 lr:             1.0e-4
 weight_decay:   1.0e-4
@@ -82,7 +82,7 @@ nbr_weight:      0.3
 nbr_scales:      [5, 11]   # kernel sizes in pixels (≈20km and ≈44km at 4km/px)
 
 # Spectral loss — applied to IR/cloud channels only (not LI)
-spectral_weight: 0.1
+spectral_weight: 0.5
 
 # Stratified sequence sampling
 oversample_factor:  5.0    # top-density sequences oversampled N×
@@ -102,5 +102,5 @@ n_members:    1
 cfg_scale:    1.5
 
 output_dir:      outputs/nonelbo_v1
-resume:          false   # fresh start
+resume:          true   # fresh start
 wandb_project:   "DDIM-LI"

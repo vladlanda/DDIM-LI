@@ -8,12 +8,12 @@
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-checkpoint:   outputs/pred_1h_input_3h_dim_64/best.pt
+checkpoint:   outputs/nonelbo_v1/best.pt
 
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/inference/central_africa_4
+  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
 
-output_dir:   outputs/eval_pred_1h_input_3h_dim_64
+output_dir:   outputs/nonelbo_v1/eval
 
 # ----------------------------------------------------------
 # Ensemble sampling
@@ -29,7 +29,7 @@ num_steps:    20
 # S_churn=0  → deterministic DDIM (fastest, least diverse)
 # S_churn=40 → moderate stochasticity (recommended)
 # S_churn=80 → high stochasticity
-S_churn:      40.0
+S_churn:      60.0
 S_noise:      1.003
 
 
