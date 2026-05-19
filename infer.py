@@ -205,6 +205,8 @@ def parse_args():
     p.add_argument("--steps_to_plot", nargs="+", type=int,
                    default=None,
                    help="Forecast steps (0-indexed) to plot. Default: all steps.")
+    p.add_argument("--gpu",           type=int, default=0,
+                   help="GPU index for diagnostic. Use 1 if GPU 0 is occupied by training.")
     p.add_argument("--diag_cfg",      action="store_true",
                    help="CFG conditioning diagnostic: run inference at cfg_scale=0 "
                         "(unconditional) and cfg_scale=5 (strong conditioning) and "
@@ -240,9 +242,11 @@ def run_cfg_diagnostic(args):
                         format="%(asctime)s %(levelname)s %(message)s")
     logger = logging.getLogger(__name__)
 
-    # Force CPU — CUDA may be fully occupied by training process
-    device = torch.device("cpu")
-    ckpt   = torch.load(args.checkpoint, map_location="cpu")
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{getattr(args, "gpu", 0)}")
+    else:
+        device = torch.device("cpu")
+    ckpt   = torch.load(args.checkpoint, map_location=device)
     ca     = ckpt["args"]
 
     channels = ca["channels"]
@@ -281,9 +285,9 @@ def run_cfg_diagnostic(args):
 
     # Use sequence index 0
     sample   = ds[0]
-    ctx      = sample["context"].unsqueeze(0)    # (1, T_in, C_ctx, H, W) — CPU
-    ch_mask  = sample["tgt_mask"][0].unsqueeze(0)  # (1, C) — CPU
-    lead_idx = torch.zeros(1, dtype=torch.long)
+    ctx      = sample["context"].unsqueeze(0).to(device)
+    ch_mask  = sample["tgt_mask"][0].unsqueeze(0).to(device)
+    lead_idx = torch.zeros(1, dtype=torch.long, device=device)
 
     diffs = []
     n_trials = 3   # 3 trials is enough for the diagnostic
@@ -301,14 +305,13 @@ def run_cfg_diagnostic(args):
                 return uncond + _scale * (cond - uncond)
 
             pred = edm_sampler(
-                denoiser_fn, (1, C, ctx.shape[-2], ctx.shape[-1]),
-                torch.device("cpu"),
+                denoiser_fn, (1, C, ctx.shape[-2], ctx.shape[-1]), device,
                 num_steps = args.num_steps,
                 sigma_min = schedule.sigma_data * 0.01,
                 sigma_max = 80.0,
                 S_churn   = args.S_churn,
             )
-            preds[scale] = pred.cpu().numpy()
+            preds[scale] = pred.detach().cpu().numpy()
 
         diff = np.abs(preds[0.0] - preds[5.0]).mean()
         diffs.append(diff)
