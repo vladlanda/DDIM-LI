@@ -793,12 +793,13 @@ def _make_li(frames: np.ndarray, channels: List[str]) -> np.ndarray:
 
 
 def plot_forecast(
-    context_np:    np.ndarray,                  # (T_in,  C, H, W) denormalised
+    context_np:    np.ndarray,                  # (T_in,  C_ctx, H, W) denormalised
     ens_np:        np.ndarray,                  # (M, T_out, C, H, W) denormalised
-    channels:      List[str],
+    channels:      List[str],                   # data channels (for ens/gt)
     gt_np:         Optional[np.ndarray] = None, # (T_out, C, H, W) or None
-    steps_to_plot: Optional[List[int]]  = None, # None = all steps
+    steps_to_plot: Optional[List[int]]  = None,
     save_path:     Optional[str]        = None,
+    ctx_channels:  Optional[List[str]]  = None, # context channels (may differ from channels)
 ):
     """
     Layout: rows × columns grid.
@@ -852,9 +853,10 @@ def plot_forecast(
             ax.set_facecolor("white")
 
     # Pre-compute last context frame composites (shared across all columns)
-    ctx_last = context_np[-1]              # (C, H, W)
-    ctx_rgb  = _make_rgb(ctx_last, channels)
-    ctx_li   = _make_li(ctx_last,  channels)
+    ctx_last    = context_np[-1]           # (C_ctx, H, W)
+    _ctx_chs    = ctx_channels if ctx_channels is not None else channels
+    ctx_rgb     = _make_rgb(ctx_last, _ctx_chs)
+    ctx_li      = _make_li(ctx_last,  _ctx_chs)
 
     font_title = max(4, min(7, int(120 / n_steps)))   # shrinks gracefully
 
@@ -1603,7 +1605,8 @@ def run_test_evaluation(args):
                         ens_den[m, :, ci] = fn(ens_np[b, m, :, ci])
                 png = os.path.join(args.output_dir, "plots", f"eval_{seq_counter:04d}.png")
                 plot_forecast(context_np=ctx_den, ens_np=ens_den,
-                              channels=channels, gt_np=tgt_den, save_path=png)
+                              channels=channels, gt_np=tgt_den, save_path=png,
+                              ctx_channels=ctx_channels if ctx_channels else channels)
 
             seq_counter += 1
 
