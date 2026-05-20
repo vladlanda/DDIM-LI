@@ -30,7 +30,7 @@ S_noise:      1.003
 fss_prob_thresholds:  [0.1, 0.3, 0.5]
 fss_scales:           [1, 2, 4, 8, 16, 32]
 pixel_size_km:        4.0
-li_event_threshold:   0.1
+li_event_threshold:   0.0196   # 5/255: requires >=5 flash counts, rejects denoiser background haze
 
 # ----------------------------------------------------------
 # Plots

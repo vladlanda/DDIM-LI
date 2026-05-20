@@ -677,7 +677,7 @@ def training_loss(
 
     # ── L_asymmetric: reduces FAR by penalising FP less than FN ──────
     L_asym = asymmetric_li_loss(pred, y, alpha=asym_alpha, li_idx=li_idx,
-                                norm_threshold=0.06)
+                                norm_threshold=0.16)  # equivalent to 5/255 physical
 
     # ── L_neighbourhood: spatial consistency at 2 scales ─────────────
     L_nbr = neighbourhood_li_loss(pred, y, li_idx=li_idx, scales=nbr_scales)

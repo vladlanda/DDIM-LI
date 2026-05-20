@@ -109,3 +109,6 @@ cfg_scale:    1.5
 output_dir:      outputs/nonelbo_v2
 resume:          false
 wandb_project:   "DDIM-LI"
+
+# LI event threshold for binarisation (evaluation only)
+li_event_threshold: 0.0196   # 5/255
