@@ -1583,15 +1583,22 @@ def run_test_evaluation(args):
 
             if args.plot and seq_counter < args.max_plots:
                 from dataset import denormalize as _denorm
-                ctx_b   = ctx_np[b]
-                ctx_den = np.zeros_like(ctx_b)
-                ens_den = np.zeros_like(ens_np[b])
-                tgt_den = np.zeros_like(tgt_np[b])
+                ctx_b      = ctx_np[b]              # (T_in, C_ctx, H, W)
+                ctx_den    = np.zeros_like(ctx_b)
+                ens_den    = np.zeros_like(ens_np[b])
+                tgt_den    = np.zeros_like(tgt_np[b])
+
+                # Context may have fewer channels than data (ctx_channels subset)
+                # Only denorm the channels that are present in context
+                _ctx_chs = ctx_channels if ctx_channels else channels
+                for ci, ch in enumerate(_ctx_chs):
+                    fn = (lambda x, _ch=ch: _denorm(x, stats, _ch)) if ch in stats                          else (lambda x: x)
+                    ctx_den[:, ci] = fn(ctx_b[:, ci])
+
+                # Ensemble and target always have all data channels
                 for ci, ch in enumerate(channels):
                     fn = (lambda x, _ch=ch: _denorm(x, stats, _ch)) if ch in stats                          else (lambda x: x)
-                    ctx_den[:, ci]    = fn(ctx_b[:, ci])
-                    # ens_np and tgt_np are already absolute — just denormalise
-                    tgt_den[:, ci]    = fn(tgt_np[b, :, ci])
+                    tgt_den[:, ci] = fn(tgt_np[b, :, ci])
                     for m in range(ens_np.shape[1]):
                         ens_den[m, :, ci] = fn(ens_np[b, m, :, ci])
                 png = os.path.join(args.output_dir, "plots", f"eval_{seq_counter:04d}.png")
