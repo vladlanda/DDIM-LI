@@ -1445,14 +1445,16 @@ def run_test_evaluation(args):
     from dataset import make_test_loader
 
     test_loader = make_test_loader(
-        test_roots   = args.test_roots,
-        channel_list = channels,
-        stats        = stats,
-        T_in         = T_in,
-        T_out        = T_out,
-        img_size     = tuple(args.img_size),
-        batch_size   = args.batch_size,
-        num_workers  = args.num_workers,
+        test_roots    = args.test_roots,
+        channel_list  = channels,
+        stats         = stats,
+        T_in          = T_in,
+        T_out         = T_out,
+        img_size      = tuple(args.img_size),
+        batch_size    = args.batch_size,
+        num_workers   = args.num_workers,
+        binary_li_ctx = binary_li_ctx,
+        ctx_channels  = ctx_channels,
     )
     logger.info(f"Test sequences (non-overlapping): {len(test_loader.dataset)}")
 

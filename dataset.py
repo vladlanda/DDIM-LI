@@ -692,15 +692,17 @@ def make_dataloaders(
 
 
 def make_test_loader(
-    test_roots:   List[str],
-    channel_list: List[str],
-    stats:        Dict,
-    T_in:         int   = 6,
-    T_out:        int   = 36,
-    img_size:     Tuple[int, int] = (256, 256),
-    batch_size:   int   = 4,
-    num_workers:  int   = 4,
-    max_samples:  Optional[int] = None,
+    test_roots:    List[str],
+    channel_list:  List[str],
+    stats:         Dict,
+    T_in:          int   = 6,
+    T_out:         int   = 36,
+    img_size:      Tuple[int, int] = (256, 256),
+    batch_size:    int   = 4,
+    num_workers:   int   = 4,
+    max_samples:   Optional[int] = None,
+    binary_li_ctx: bool  = False,
+    ctx_channels:  Optional[List[str]] = None,
 ):
     """
     Loader for the held-out test regions.
@@ -718,6 +720,8 @@ def make_test_loader(
         T_in=T_in, T_out=T_out, img_size=img_size,
         stats=stats, augment=False,
         max_samples=max_samples,
+        binary_li_ctx=binary_li_ctx,
+        ctx_channels=ctx_channels,
     )
 
     # Apply non-overlapping stride per region dataset
