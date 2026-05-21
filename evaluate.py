@@ -1203,7 +1203,10 @@ def _regenerate_plots(npz_path: str, args) -> None:
         thr_colors3  = {thr: thr_palette3[i % len(thr_palette3)]
                         for i, thr in enumerate(fss_prob_thresholds)}
         n_thr    = len(fss_prob_thresholds)
-        scale_km = [s * args.pixel_size_km for s in fss_scales]
+        # FSS window size = (2*scale+1) pixels (Roberts & Lean 2008).
+        # The x-axis should show the actual neighbourhood diameter in km,
+        # not the half-width scale parameter.
+        scale_km = [(2*s + 1) * args.pixel_size_km for s in fss_scales]
 
         # Two-row layout: top row = per-lead-time curves, bottom row = lead-time mean
         fig3, axes3 = plt.subplots(2, n_thr, figsize=(5.5 * n_thr, 9),

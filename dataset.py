@@ -414,6 +414,7 @@ class METSATDataset(Dataset):
         if self.augment and np.random.rand() > 0.5:
             context         = context[:, :, :, ::-1].copy()
             target_residual = target_residual[:, :, :, ::-1].copy()
+            last_ctx        = last_ctx[:, :, :, ::-1].copy()
 
         # LI density: fraction of non-zero LI pixels across all target frames.
         # Used for dynamic li_weight during training (Cui et al. 2019).

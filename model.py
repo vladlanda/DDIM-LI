@@ -507,51 +507,48 @@ def channel_weighted_mse(
 def asymmetric_li_loss(
     pred:           torch.Tensor,
     target:         torch.Tensor,
+    last_ctx:       torch.Tensor,
     alpha:          float = 0.1,
     li_idx:         int   = 1,
-    norm_threshold: float = 0.06,
+    norm_threshold: float = 0.16,
 ) -> torch.Tensor:
     """
     Asymmetric pixel loss for the LI channel.
 
-    For pixels where GT=0 (no lightning), false positives are penalised
-    by factor alpha < 1 — making the model more spatially selective early
-    in training, directly reducing FAR.
+    Operates in ABSOLUTE normalised space (residual + last_ctx) because:
+    - pred and target are RESIDUALS (change from last context frame)
+    - A residual ≈ 0 means "LI unchanged", NOT "no lightning"
+    - Thresholding residuals confuses "LI continues" with "no LI"
+    - We want: GT=0 ↔ no lightning in the ABSOLUTE target frame
 
-    For pixels where GT>0 (lightning present), standard MSE applies.
+    For pixels where absolute GT=0 (no lightning), false positives are
+    penalised by factor alpha < 1 — making the model more spatially
+    selective, directly reducing FAR.
 
-    As alpha → 1 this becomes standard MSE.
+    For pixels where absolute GT>0 (lightning present), standard MSE applies.
 
     Following Gao et al. 2022 (EarthFormer) applied to convective nowcasting.
 
     Args:
-        pred, target   : (B, C, H, W) in NORMALISED space
+        pred, target   : (B, C, H, W) NORMALISED RESIDUALS
+        last_ctx       : (B, C, H, W) last context frame (normalised absolute)
         alpha          : FP cost relative to FN (0.1 → FP penalised at 10%%).
-                         Anneal toward 1.0 over training to balance.
         li_idx         : index of LI channel
-        norm_threshold : threshold in NORMALISED space to distinguish
-                         lightning (GT>0) from no-lightning (GT=0).
-
-                         Derivation: physical 5/255 → cbrt(5/255) ≈ 0.270
-                         → normalised = (0.270 - mean_li) / std_li
-                         With measured mean_li=0.089, std_li=1.14:
-                         norm_threshold = (0.270 - 0.089) / 1.14 ≈ 0.16
-
-                         This is the normalised equivalent of 5/255 physical,
-                         consistent with the evaluation li_event_threshold.
-                         Rejects sub-threshold denoiser background noise.
+        norm_threshold : threshold in ABSOLUTE normalised space.
+                         norm_threshold=0.16 ≈ 5/255 in physical space.
     """
-    pred_li   = pred[:, li_idx]      # (B, H, W)
-    target_li = target[:, li_idx]
+    # Convert residuals to absolute normalised values
+    pred_abs_li   = pred[:, li_idx]   + last_ctx[:, li_idx]   # (B, H, W)
+    target_abs_li = target[:, li_idx] + last_ctx[:, li_idx]
 
-    # Threshold in normalised space — consistent with the data pipeline
-    gt_pos = (target_li >= norm_threshold).float()   # 1 where lightning present
+    # GT=0: no lightning in absolute target frame
+    gt_pos = (target_abs_li >= norm_threshold).float()
     gt_neg = 1.0 - gt_pos
 
-    sq_err = (pred_li - target_li) ** 2
+    # Loss on residuals (not absolutes) — we want the model to predict
+    # the correct residual, penalised asymmetrically based on absolute GT
+    sq_err = (pred[:, li_idx] - target[:, li_idx]) ** 2
 
-    # FP: predicted non-zero where GT=0 (penalised by alpha)
-    # FN: predicted zero  where GT>0  (full penalty)
     loss = (alpha * gt_neg + gt_pos) * sq_err
     return loss.mean()
 
@@ -578,8 +575,15 @@ def neighbourhood_li_loss(
         scales : kernel sizes for avg_pool2d (in pixels).
                  k=5 ≈ 20km, k=11 ≈ 44km at 4km/pixel resolution.
     """
-    pred_li   = pred[:, li_idx:li_idx+1]      # (B, 1, H, W)
-    target_li = target[:, li_idx:li_idx+1]
+    # Operate on absolute values (residual + last_ctx) so the spatial
+    # consistency is measured relative to actual lightning presence,
+    # not relative to change from last context frame.
+    # For neighbourhood loss, last_ctx must be passed through training_loss.
+    pred_li   = pred[:, li_idx:li_idx+1]      # (B, 1, H, W) — residuals
+    target_li = target[:, li_idx:li_idx+1]    # spatial consistency on residuals is fine
+    # Note: spatial consistency on residuals is still meaningful — if the
+    # model produces a spatially smooth residual, the absolute prediction
+    # will also be spatially smooth. No last_ctx needed here ✓
 
     loss = 0.0
     for k in scales:
@@ -694,10 +698,12 @@ def training_loss(
     L_denoise = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, dyn_w)
 
     # ── L_asymmetric: reduces FAR by penalising FP less than FN ──────
-    # Applied to the denoised prediction — meaningful at all noise levels
-    # since D_θ estimates the clean target regardless of σ (EDM preconditioning).
-    L_asym = asymmetric_li_loss(pred, y, alpha=asym_alpha, li_idx=li_idx,
-                                norm_threshold=0.16)  # normalised equivalent of 5/255 physical
+    # Uses absolute normalised values (residual + last_ctx) so that GT=0
+    # correctly means "no lightning in absolute target frame", not
+    # "no change from context frame" (which residual=0 would mean).
+    last_ctx = batch["last_ctx"].to(device)   # (B, C, H, W)
+    L_asym = asymmetric_li_loss(pred, y, last_ctx, alpha=asym_alpha, li_idx=li_idx,
+                                norm_threshold=0.16)  # ≈ 5/255 physical
 
     # ── L_neighbourhood: spatial consistency at 2 scales ─────────────
     L_nbr = neighbourhood_li_loss(pred, y, li_idx=li_idx, scales=nbr_scales)
