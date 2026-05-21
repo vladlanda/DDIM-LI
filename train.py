@@ -141,6 +141,7 @@ def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDe
         attn_resolutions = tuple(args.attn_resolutions),
         dropout          = args.dropout,
         emb_dim          = args.emb_dim,
+        img_size         = tuple(args.img_size)[0],
     )
     precond = EDMPrecond(unet, sigma_data=args.sigma_data)
     return MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)

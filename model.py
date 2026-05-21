@@ -138,6 +138,7 @@ class UNet(nn.Module):
         dropout:          float = 0.1,
         emb_dim:          int   = 512,
         num_groups:       int   = 8,
+        img_size:         int   = 64,
     ):
         super().__init__()
         self.emb_dim    = emb_dim
@@ -158,10 +159,17 @@ class UNet(nn.Module):
         self.input_conv = nn.Conv2d(in_channels, base_channels, 3, padding=1)
 
         # ── Build encoder plan ──────────────────────────────────────
+        # res tracks the spatial resolution as we go deeper.
+        # Must be initialised to the actual input image size, not a fixed value.
+        # With img_size=64, attn_resolutions=[16,8]: attention fires at levels 2,3.
+        # With img_size=256, attn_resolutions=[16,8]: attention fires at levels 4,5.
         enc_plan: list[dict] = []
         skip_channels: list[int] = []
         ch  = base_channels
-        res = 256
+        # Infer starting resolution from in_channels is not possible here;
+        # use the known default. For non-square or non-power-of-2 images,
+        # pass img_size explicitly via a future refactor.
+        res = img_size   # must match actual spatial input size
 
         for level, mult in enumerate(channel_mults):
             out_ch = base_channels * mult
@@ -517,13 +525,14 @@ def asymmetric_li_loss(
         norm_threshold : threshold in NORMALISED space to distinguish
                          lightning (GT>0) from no-lightning (GT=0).
 
-                         Derivation: physical 1/255 → cbrt(1/255) ≈ 0.158
-                         → normalised = (0.158 - mean_li) / std_li
+                         Derivation: physical 5/255 → cbrt(5/255) ≈ 0.270
+                         → normalised = (0.270 - mean_li) / std_li
                          With measured mean_li=0.089, std_li=1.14:
-                         norm_threshold = (0.158 - 0.089) / 1.14 ≈ 0.06
+                         norm_threshold = (0.270 - 0.089) / 1.14 ≈ 0.16
 
-                         This is the normalised equivalent of "at least one
-                         flash count recorded", consistent with evaluation.
+                         This is the normalised equivalent of 5/255 physical,
+                         consistent with the evaluation li_event_threshold.
+                         Rejects sub-threshold denoiser background noise.
     """
     pred_li   = pred[:, li_idx]      # (B, H, W)
     target_li = target[:, li_idx]
@@ -639,7 +648,9 @@ def training_loss(
     tgt_mask = batch["tgt_mask"].to(device)    # (B, T_out, C)
 
     B, T_out, C, H, W = target.shape
-    li_idx = 1   # ir=0, li=1, ch0=2, ch1=3 (consistent with channel ordering)
+    li_idx = 1   # ir=0, li=1, ch0=2, ch1=3
+    # NOTE: li_idx=1 is hardcoded and must match args.channels order.
+    # If channels=[ir,li,ch0,ch1] this is always correct.
 
     # Sample one random lead step per batch item
     lead_idx = torch.randint(0, T_out, (B,), device=device)
@@ -676,8 +687,10 @@ def training_loss(
     L_denoise = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(), ch_mask, dyn_w)
 
     # ── L_asymmetric: reduces FAR by penalising FP less than FN ──────
+    # Applied to the denoised prediction — meaningful at all noise levels
+    # since D_θ estimates the clean target regardless of σ (EDM preconditioning).
     L_asym = asymmetric_li_loss(pred, y, alpha=asym_alpha, li_idx=li_idx,
-                                norm_threshold=0.16)  # equivalent to 5/255 physical
+                                norm_threshold=0.16)  # normalised equivalent of 5/255 physical
 
     # ── L_neighbourhood: spatial consistency at 2 scales ─────────────
     L_nbr = neighbourhood_li_loss(pred, y, li_idx=li_idx, scales=nbr_scales)

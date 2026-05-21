@@ -1433,6 +1433,7 @@ def run_test_evaluation(args):
         attn_resolutions = tuple(ckpt_args["attn_resolutions"]),
         dropout          = 0.0,
         emb_dim          = ckpt_args["emb_dim"],
+        img_size         = ckpt_args.get("img_size", [64, 64])[0],
     )
     precond  = EDMPrecond(unet, sigma_data=ckpt_args.get("sigma_data", 0.5))
     model    = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)

@@ -62,6 +62,7 @@ def load_model(checkpoint: str, device: torch.device):
         attn_resolutions = tuple(ckpt_args["attn_resolutions"]),
         dropout          = 0.0,
         emb_dim          = ckpt_args["emb_dim"],
+        img_size         = ckpt_args.get("img_size", [64, 64])[0],
     )
     precond = EDMPrecond(unet, sigma_data=ckpt_args.get("sigma_data", 1.0))
     model   = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)
