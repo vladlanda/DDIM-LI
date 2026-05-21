@@ -488,8 +488,7 @@ def train(args):
                      "args":     vars(args)},
                     os.path.join(args.output_dir, "best.pt"),
                 )
-                logger.info(f"  ↑ New best (val_loss={val_loss:.4f} "
-                            f"val_li_mse={val_li_mse:.4f} criterion={best_val:.4f})")
+                logger.info(f"  ↑ New best val_loss={val_loss:.4f} (criterion={best_val:.4f})")
 
             torch.save({
                 "epoch":    epoch,
