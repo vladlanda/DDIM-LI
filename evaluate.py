@@ -105,7 +105,7 @@ def generate_ensemble(
             pred = edm_sampler(
                 denoiser_fn, (B, C, H, W), device,  # (B, C_data, H, W)
                 num_steps = num_steps,
-                sigma_min = model.precond.sigma_data * 0.01,
+                sigma_min = 0.002,    # match training sigma_min from args
                 sigma_max = 80.0,
                 S_churn   = S_churn,
                 S_noise   = S_noise,

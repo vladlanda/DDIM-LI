@@ -468,15 +468,11 @@ def train(args):
         # Checkpoint + logging — rank 0 only.
         if main:
             val_loss    = val_metrics.get("val_loss",    float("inf"))
-            val_li_mse  = val_metrics.get("val_li_mse", float("inf"))
-            # Composite val criterion: combine overall loss and LI-specific MSE.
-            # val_loss alone uses li_weight=3 which underweights LI.
-            # val_li_mse is the per-pixel LI MSE without channel weighting.
-            # We weight LI MSE by 5 to reflect its importance.
-            if val_li_mse < float("inf"):
-                val_criterion = val_loss + 5.0 * val_li_mse
-            else:
-                val_criterion = val_loss
+            # Use val_loss directly as the checkpoint criterion.
+            # val_loss already includes LI channel weighted at li_weight=20
+            # via channel_weighted_mse in fast_val_metrics.
+            # Adding val_li_mse separately would double-count LI.
+            val_criterion = val_loss
 
             if val_criterion < best_val and val_criterion < float("inf"):
                 best_val = val_criterion
