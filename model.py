@@ -485,11 +485,10 @@ def channel_weighted_mse(
     ch_mask      : (B, C)
     li_weight    : scalar or (B,) tensor
     """
-    weights = torch.ones_like(ch_mask)
-    if isinstance(li_weight, torch.Tensor):
-        weights[:, li_idx] = li_weight
-    else:
-        weights[:, li_idx] = li_weight
+    weights = torch.ones_like(ch_mask)   # (B, C), float
+    # li_weight can be scalar or (B,) tensor — assignment works for both
+    weights[:, li_idx] = li_weight if isinstance(li_weight, (int, float)) \
+                         else li_weight.to(ch_mask.device)
 
     per_px  = (pred - target) ** 2
     mask_4d = ch_mask[:, :, None, None]

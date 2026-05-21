@@ -212,8 +212,20 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
     if not ddp_active() or world_size == 1:
         return train_loader, val_loader, stats
 
-    # Replace samplers with DistributedSampler
+    # Replace samplers with DistributedSampler for DDP.
+    # NOTE: WeightedRandomSampler from make_dataloaders is replaced here,
+    # so density-based oversampling is NOT active in multi-GPU training.
+    # DistributedSampler handles data sharding but uses uniform sampling.
+    # This is a known limitation — a distributed weighted sampler would
+    # require a custom implementation. For now, the dynamic li_weight
+    # (Cui et al. 2019) still operates per-sample inside training_loss.
     from torch.utils.data import DataLoader
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        "DDP mode: WeightedRandomSampler replaced by DistributedSampler. "
+        "Density-based sequence oversampling is disabled. "
+        "Dynamic li_weight (per-sample) remains active."
+    )
 
     train_sampler = DistributedSampler(
         train_loader.dataset,
@@ -454,13 +466,24 @@ def train(args):
 
         # Checkpoint + logging — rank 0 only.
         if main:
-            val_loss = val_metrics.get("val_loss", float("inf"))
-            if val_loss < best_val and val_loss < float("inf"):
-                best_val = val_loss
+            val_loss    = val_metrics.get("val_loss",    float("inf"))
+            val_li_mse  = val_metrics.get("val_li_mse", float("inf"))
+            # Composite val criterion: combine overall loss and LI-specific MSE.
+            # val_loss alone uses li_weight=3 which underweights LI.
+            # val_li_mse is the per-pixel LI MSE without channel weighting.
+            # We weight LI MSE by 5 to reflect its importance.
+            if val_li_mse < float("inf"):
+                val_criterion = val_loss + 5.0 * val_li_mse
+            else:
+                val_criterion = val_loss
+
+            if val_criterion < best_val and val_criterion < float("inf"):
+                best_val = val_criterion
                 torch.save(
                     {"model":    raw_model.state_dict(),
                      "ema":      ema.state_dict() if ema else {},
                      "opt":      opt.state_dict(),
+                     "sched":    sched.state_dict(),
                      "epoch":    epoch,
                      "best_val": best_val,
                      "stats":    stats,
@@ -468,7 +491,8 @@ def train(args):
                      "args":     vars(args)},
                     os.path.join(args.output_dir, "best.pt"),
                 )
-                logger.info(f"  ↑ New best val_loss: {best_val:.4f}")
+                logger.info(f"  ↑ New best (val_loss={val_loss:.4f} "
+                            f"val_li_mse={val_li_mse:.4f} criterion={best_val:.4f})")
 
             torch.save({
                 "epoch":    epoch,

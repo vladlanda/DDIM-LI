@@ -126,7 +126,7 @@ def normalize(img: np.ndarray, stats: Dict, ch: str) -> np.ndarray:
 def denormalize(img: np.ndarray, stats: Dict, ch: str) -> np.ndarray:
     img = img * stats[ch]["std"] + stats[ch]["mean"]
     if stats[ch]["transform"] == "cbrt":
-        img = np.power(img, 3)
+        img = np.power(np.clip(img, 0.0, None), 3)   # cbrt channels are non-negative
     return img
 
 
@@ -444,7 +444,8 @@ class METSATDataset(Dataset):
             li_phys = li_norm * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-            li_bin  = (li_phys >= 1.0 / 255.0).astype(np.float32)    # (T_in, H, W)
+            li_bin  = (li_phys >= 5.0 / 255.0).astype(np.float32)    # (T_in, H, W)
+            # threshold=5/255 consistent with li_event_threshold in evaluation
             context_out = np.concatenate(
                 [ctx, li_bin[:, None, :, :]], axis=1                  # (T_in, C_ctx+1, H, W)
             )

@@ -682,7 +682,7 @@ def fast_val_metrics(
         # val_loss: EDM-weighted (comparable to train_loss)
         lw   = schedule.edm_loss_weight(sigma)[:, None, None, None]
         loss = channel_weighted_mse(pred * lw.sqrt(), y * lw.sqrt(),
-                                    ch_mask, li_weight=3.0)
+                                    ch_mask, li_weight=20.0)  # match training li_weight
 
         # val_mse / val_mae: unweighted pixel errors
         err     = pred - y
