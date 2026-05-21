@@ -382,14 +382,22 @@ class EDMSchedule:
         self.P_std      = P_std
         self.sigma_min  = sigma_min
         self.sigma_max  = sigma_max
-        self.sigma_data = sigma_data
+        self.sigma_data = sigma_data  # RMS of training data (residuals)
 
     def sample_sigma(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Sample σ ~ lognormal(P_mean, P_std)."""
         return (torch.randn(batch_size, device=device) * self.P_std + self.P_mean).exp()
 
     def edm_loss_weight(self, sigma: torch.Tensor) -> torch.Tensor:
-        """λ(σ) = (σ² + σ_data²) / (σ · σ_data)²"""
+        """
+        λ(σ) = (σ² + σ_data²) / (σ · σ_data)²    (Karras et al. 2022 Table 1)
+
+        σ_data must be the RMS of the training targets (residuals, not raw frames).
+        For normalised residuals this is typically 0.2–0.5, NOT 1.0.
+        Use check_residual_stats.py to measure and set sigma_data in default.yaml.
+        Wrong sigma_data shifts the transition point where c_skip=0.5, biasing
+        the preconditioner toward copying the noisy input at low noise levels.
+        """
         sd = self.sigma_data
         return (sigma**2 + sd**2) / (sigma * sd)**2
 

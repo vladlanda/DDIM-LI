@@ -407,7 +407,10 @@ def spread_skill(
 
     Following Fortin et al. 2014, MWR.
     """
-    spread = float(np.std(ens_np, axis=0).mean())
+    # Spread = sqrt(mean spatial variance) — Fortin et al. 2014, MWR.
+    # Must use sqrt(mean(var)) NOT mean(std):
+    # mean(std) < sqrt(mean(var)) by Jensen's inequality, biasing ratio low.
+    spread = float(np.sqrt(np.var(ens_np, axis=0).mean()))
     skill  = float(np.sqrt(np.mean((ens_np.mean(axis=0) - tgt_np) ** 2)))
     return spread / (skill + 1e-8)
 

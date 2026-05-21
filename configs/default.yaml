@@ -40,7 +40,11 @@ num_res_blocks:    2
 attn_resolutions:  [16, 8]
 dropout:           0.1
 emb_dim:           256
-sigma_data:        1.0            # measured RMS residual std across all training folders
+sigma_data:        0.5            # RMS of normalised residuals — MUST be measured.
+                                  # Run: python check_residual_stats.py <train_roots>
+                                  # Typical range for normalised residuals: 0.2-0.5.
+                                  # Wrong value biases EDM preconditioner (Karras 2022).
+                                  # Affects c_skip/c_out/c_in scalars and loss weight λ(σ).
 
 # ----------------------------------------------------------
 # EDM noise schedule

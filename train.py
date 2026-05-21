@@ -302,10 +302,11 @@ def train(args):
     ema = EMA(model, decay=args.ema_decay) if main else None
 
     schedule = EDMSchedule(
-        P_mean    = args.P_mean,
-        P_std     = args.P_std,
-        sigma_min = args.sigma_min,
-        sigma_max = args.sigma_max,
+        P_mean     = args.P_mean,
+        P_std      = args.P_std,
+        sigma_min  = args.sigma_min,
+        sigma_max  = args.sigma_max,
+        sigma_data = args.sigma_data,  # must match EDMPrecond sigma_data
     )
 
     # ----- Optimiser & scaler -----
