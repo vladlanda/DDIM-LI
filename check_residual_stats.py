@@ -12,6 +12,16 @@ Usage:
     # Custom channels / sequence budget
     python check_residual_stats.py /data/central_africa_1 /data/central_africa_2 \
         --channels ir li ch1 ch2 --n_seq 500
+
+
+    python check_residual_stats.py \
+        /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1 \
+        /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2 \
+        /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3 \
+        --channels ir li ch0 ch1 \
+        --T_in 18 \
+        --T_out 6 \
+        --n_seq 500
 """
 
 import argparse

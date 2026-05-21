@@ -9,12 +9,12 @@
 # Data
 # ----------------------------------------------------------
 train_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_1
-  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_2
-  # - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
 
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
 
 # Temporal split — first 80% train, last 20% validation (no leakage)
 train_val_split: 0.8
@@ -28,7 +28,7 @@ channels:
 T_in:    18         # context frames  (18 × 10 min = 3 hours)
 T_out:   6          # forecast steps  (6  × 10 min = 1 hour)
 dt_min:  10
-img_size: [64, 64]
+img_size: [256, 256]
 max_samples: null
 
 # ----------------------------------------------------------
@@ -37,10 +37,10 @@ max_samples: null
 base_channels:     64
 channel_mults:     [1, 2, 3, 4]
 num_res_blocks:    2
-attn_resolutions:  [16, 8]
+attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
-sigma_data:        0.5            # RMS of normalised residuals — MUST be measured.
+sigma_data:        0.62            # RMS of normalised residuals — MUST be measured.
                                   # Run: python check_residual_stats.py <train_roots>
                                   # Typical range for normalised residuals: 0.2-0.5.
                                   # Wrong value biases EDM preconditioner (Karras 2022).
@@ -57,8 +57,8 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         600
-batch_size:     32
+epochs:         100
+batch_size:     8
 lr:             1.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
@@ -105,12 +105,12 @@ ctx_channels:    [ir, ch0, ch1]
 # Validation & logging
 # ----------------------------------------------------------
 slow_val:     false
-val_every:    5
+val_every:    10
 val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nonelbo_v2
+output_dir:      outputs/nonelbo_v3_256
 resume:          false
 wandb_project:   "DDIM-LI"
 
