@@ -138,8 +138,8 @@ def _li_to_physical(arr: np.ndarray, stats: Dict, ch: str = "li") -> np.ndarray:
         return arr
     x = arr * stats[ch]["std"] + stats[ch]["mean"]   # undo z-score
     if stats[ch].get("transform") == "cbrt":
-        x = np.power(x, 3)                            # undo cbrt
-    return x
+        x = np.power(np.clip(x, 0.0, None), 3)        # undo cbrt, clip negatives
+    return np.clip(x, 0.0, 1.0)                       # physical LI is in [0, 1]
 
 
 def crps_energy(
@@ -423,7 +423,7 @@ def evaluate_epoch(
     n_members:    int   = 10,
     val_samples:  int   = -1,      # batches to evaluate; -1 = full val set
     cfg_scale:    float = 1.5,
-    li_event_threshold: float = 1.0/255.0,
+    li_event_threshold: float = 5.0/255.0,
     dt_min:       int   = 10,
 ) -> Dict[str, float]:
     """
@@ -613,7 +613,7 @@ def fast_val_metrics(
     device:       "torch.device",
     channels:     List[str],
     val_samples:  int   = -1,      # batches to use; -1 = full val set
-    li_event_threshold: float = 1.0/255.0,
+    li_event_threshold: float = 5.0/255.0,
 ) -> Dict[str, float]:
     """
     Cheap validation metrics for use every training epoch.
@@ -1649,17 +1649,40 @@ def run_test_evaluation(args):
             if skill_by_step[t]:
                 brier_vals = [sc["brier"] for sc in skill_by_step[t]]
                 row["brier"] = float(np.mean(brier_vals))
-                # Store CSI/POD/FAR at representative thresholds for the CSV
+
+                # CSI/POD/FAR at the threshold that maximises CSI for each curve
+                # and at fixed ensemble probability thresholds (0.1, 0.3, 0.5).
+                # Note: sc["thresholds"] are ensemble probability cutoff values
+                # from precision_recall_curve — already in [0,1].
+                csi_max, pod_at_max, far_at_max = [], [], []
+                for sc in skill_by_step[t]:
+                    if len(sc["csi"]) == 0:
+                        continue
+                    best = int(np.argmax(sc["csi"]))
+                    csi_max.append(sc["csi"][best])
+                    pod_at_max.append(sc["pod"][best])
+                    far_at_max.append(sc["far"][best])
+                if csi_max:
+                    row["csi_max"]     = float(np.mean(csi_max))
+                    row["pod_at_max"]  = float(np.mean(pod_at_max))
+                    row["far_at_max"]  = float(np.mean(far_at_max))
+
+                # Also report at fixed ensemble probability thresholds for comparison
                 for thr in fss_prob_thresholds:
-                    csi_at = [float(np.interp(thr, sc["thresholds"][::-1], sc["csi"][::-1]))
-                              for sc in skill_by_step[t]]
-                    pod_at = [float(np.interp(thr, sc["thresholds"][::-1], sc["pod"][::-1]))
-                              for sc in skill_by_step[t]]
-                    far_at = [float(np.interp(thr, sc["thresholds"][::-1], sc["far"][::-1]))
-                              for sc in skill_by_step[t]]
-                    row[f"csi_{thr}"] = float(np.mean(csi_at))
-                    row[f"pod_{thr}"] = float(np.mean(pod_at))
-                    row[f"far_{thr}"] = float(np.mean(far_at))
+                    csi_at, pod_at, far_at = [], [], []
+                    for sc in skill_by_step[t]:
+                        if len(sc["thresholds"]) == 0:
+                            continue
+                        # thresholds from precision_recall_curve are sorted ascending
+                        csi_at.append(float(np.interp(
+                            thr, sc["thresholds"], sc["csi"])))
+                        pod_at.append(float(np.interp(
+                            thr, sc["thresholds"], sc["pod"])))
+                        far_at.append(float(np.interp(
+                            thr, sc["thresholds"], sc["far"])))
+                    row[f"csi_{thr}"] = float(np.mean(csi_at)) if csi_at else float("nan")
+                    row[f"pod_{thr}"] = float(np.mean(pod_at)) if pod_at else float("nan")
+                    row[f"far_{thr}"] = float(np.mean(far_at)) if far_at else float("nan")
                 mid_s = fss_scales[len(fss_scales) // 2]
                 for thr in fss_prob_thresholds:
                     row[f"fss_{thr}"] = _mean(fss_by_thr_scale_step[thr][mid_s][t])
@@ -1817,11 +1840,11 @@ if __name__ == "__main__":
                         "before computing FSS (the only metric that still needs a "
                         "fixed threshold — all others sweep thresholds internally). "
                         "Each value gives one FSS curve on the spatial-scale plot.")
-    p.add_argument("--li_event_threshold", type=float, default=1.0/255.0,
+    p.add_argument("--li_event_threshold", type=float, default=5.0/255.0,
                    help="LI binarisation threshold in physical space [0,1]. "
-                        "Default=1/255: any pixel with at least one recorded flash "
-                        "counts as lightning, consistent with the integer flash-count "
-                        "nature of the LI product (each pixel = flash count per 10-min window).")
+                        "Default=5/255=0.0196: requires at least 5 flash counts, "
+                        "rejecting sub-threshold denoiser background noise. "
+                        "Applies to both GT and ensemble binarisation.")
     p.add_argument("--gpu",           type=int,   default=0)
     p.add_argument("--plot",          action="store_true",
                    help="Save full forecast PNGs for each test sequence")
