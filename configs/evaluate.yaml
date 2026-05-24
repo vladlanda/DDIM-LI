@@ -8,17 +8,17 @@
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-checkpoint:   outputs/nonelbo_v1/best.pt
+checkpoint:   outputs/nonelbo_v3_256/best.pt
 
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/small/central_africa_4
+  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
 
-output_dir:   outputs/nonelbo_v1/eval
+output_dir:   outputs/nonelbo_v3_256/eval
 
 # ----------------------------------------------------------
 # Ensemble sampling
 # ----------------------------------------------------------
-n_members:    32
+n_members:    1
 cfg_scale:    1.5
 num_steps:    20
 S_churn:      60.0
@@ -43,6 +43,6 @@ max_plots:     20
 # Hardware
 # ----------------------------------------------------------
 gpu:          0
-batch_size:   4
+batch_size:   32
 num_workers:  4
-img_size:     [64, 64]
+img_size:     [256, 256]

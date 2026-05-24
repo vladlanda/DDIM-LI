@@ -57,9 +57,9 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         100
-batch_size:     8
-lr:             1.0e-4
+epochs:         300
+batch_size:     16
+lr:             2.0e-4
 weight_decay:   1.0e-4
 grad_clip:      1.0
 ema_decay:      0.9999
@@ -111,7 +111,7 @@ n_members:    1
 cfg_scale:    1.5
 
 output_dir:      outputs/nonelbo_v3_256
-resume:          false
+resume:          true
 wandb_project:   "DDIM-LI"
 
 # LI event threshold for binarisation (evaluation only)
