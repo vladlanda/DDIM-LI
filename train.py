@@ -337,16 +337,24 @@ def train(args):
                 )
 
     # Build scheduler AFTER resume.
-    # last_epoch=-1 = fresh run, >0 = resume mid-curve.
-    # In normal resume last_epoch>0 so the cosine curve continues correctly.
+    # T_max = args.epochs = TOTAL epochs across all runs (not delta).
+    # When resuming: last_epoch = start_epoch - 1 positions the cosine curve
+    # at the correct point on the NEW T_max schedule.
+    #
+    # IMPORTANT: we do NOT restore the full sched state_dict from checkpoint
+    # because it contains the old T_max (e.g. 100), which would override the
+    # new T_max (e.g. 300) and corrupt the LR schedule.
+    # We only need last_epoch to correctly position on the cosine curve.
+    # Example: first run T_max=100 → resume T_max=300, start_epoch=100:
+    #   cos(π × 100/300) = cos(60°) → LR ≈ 0.75 × lr (correct mid-descent)
     sched = CosineAnnealingLR(
         opt,
-        T_max      = args.epochs,
+        T_max      = args.epochs,         # total epochs, not delta
         eta_min    = args.lr * 0.01,
-        last_epoch = start_epoch - 1,   # -1 = fresh; >0 = mid-curve resume
+        last_epoch = start_epoch - 1,     # positions correctly on cosine curve
     )
-    if args.resume and os.path.exists(ckpt_path) and "sched" in ckpt:
-        sched.load_state_dict(ckpt["sched"])
+    # Do NOT call sched.load_state_dict — it would restore old T_max and break
+    # the schedule when args.epochs differs from the checkpoint's epoch count.
 
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
