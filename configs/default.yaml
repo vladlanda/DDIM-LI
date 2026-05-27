@@ -9,12 +9,16 @@
 # Data
 # ----------------------------------------------------------
 train_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_1
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_2
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_3
+  - /home/vladlanda/Workplace/LI-DATASETS/split/train/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/split/train/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/split/train/central_africa_3
+  - /home/vladlanda/Workplace/LI-DATASETS/split/train/central_africa_4
 
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_3
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_4
 
 # Temporal split — first 80% train, last 20% validation (no leakage)
 train_val_split: 0.8
@@ -110,7 +114,7 @@ val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nonelbo_v3_256
+output_dir:      outputs/nonelbo_chrono_256
 resume:          true
 wandb_project:   "DDIM-LI"
 

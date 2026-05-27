@@ -8,12 +8,15 @@
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-checkpoint:   outputs/nonelbo_v3_256/best.pt
+checkpoint:   outputs/nonelbo_chrono_256/best.pt
 
 test_roots:
-  - /home/vladlanda/Workplace/LI-DATASETS/full/central_africa_4
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_1
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_2
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_3
+  - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_4
 
-output_dir:   outputs/nonelbo_v3_256/eval
+output_dir:   outputs/nonelbo_chrono_256/eval
 
 # ----------------------------------------------------------
 # Ensemble sampling
