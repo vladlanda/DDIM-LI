@@ -1693,6 +1693,10 @@ def run_test_evaluation(args):
                 mid_s = fss_scales[len(fss_scales) // 2]
                 for thr in fss_prob_thresholds:
                     row[f"fss_{thr}"] = _mean(fss_by_thr_scale_step[thr][mid_s][t])
+
+                # PR-AUC for this lead step
+                if t in auc_by_step:
+                    row["pr_auc"] = auc_by_step[t]
         per_step.append(row)
 
     fss_summary = {}
