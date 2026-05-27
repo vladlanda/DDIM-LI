@@ -350,7 +350,7 @@ def train(args):
     sched = CosineAnnealingLR(
         opt,
         T_max      = args.epochs,         # total epochs, not delta
-        eta_min    = args.lr * 0.01,
+        eta_min    = args.lr * 0.001,
         last_epoch = start_epoch - 1,     # positions correctly on cosine curve
     )
     # Do NOT call sched.load_state_dict — it would restore old T_max and break
