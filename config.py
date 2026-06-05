@@ -99,6 +99,11 @@ def add_arguments(parser: argparse.ArgumentParser):
     # -- Spectral loss (cloud channels only) --
     parser.add_argument("--spectral_weight", type=float, default=0.1,
                         help="FFT magnitude loss weight. Applied to IR/cloud channels only.")
+    parser.add_argument("--lead_time_weights", nargs="+", type=float, default=None,
+                        help="Per-step sampling weights (length=T_out). "
+                             "Default None = uniform. Example: 1 1 1 1 2 3 "
+                             "oversamples +50m and +60m steps 2x and 3x. "
+                             "Normalised internally. No effect on loss magnitude.")
     # -- Stratified sampling --
     parser.add_argument("--oversample_factor",  type=float, default=5.0,
                         help="High-density LI sequences oversampled N×.")

@@ -405,7 +405,8 @@ def train(args):
                     asym_alpha       = args.asym_alpha,
                     nbr_weight       = args.nbr_weight,
                     nbr_scales       = args.nbr_scales,
-                    spectral_weight  = args.spectral_weight,
+                    spectral_weight     = args.spectral_weight,
+                    lead_time_weights   = args.lead_time_weights,
                 )
 
             scaler.scale(loss).backward()

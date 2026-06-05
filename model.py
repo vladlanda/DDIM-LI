@@ -358,14 +358,16 @@ class MultiStepDenoiser(nn.Module):
         device:     torch.device,
     ) -> torch.Tensor:
         """Return (B, T_out, C, H, W) predicted residuals."""
-        B, T_in, C, H, W = context.shape
+        B, T_in, C_ctx, H, W = context.shape
+        # C_data from output conv — not C_ctx (context may have extra binary LI channel)
+        C_data = self.precond.unet.out_conv.weight.shape[0]
         all_preds = []
         for step in range(self.T_out):
             lead_idx = torch.full((B,), step, device=device, dtype=torch.long)
             def denoiser_fn(x, sigma, _step=step):
                 _lead = torch.full((x.shape[0],), _step, device=device, dtype=torch.long)
                 return self(x, sigma, context, ch_mask, _lead)
-            all_preds.append(sampler_fn(denoiser_fn, (B, C, H, W), device))
+            all_preds.append(sampler_fn(denoiser_fn, (B, C_data, H, W), device))
         return torch.stack(all_preds, dim=1)
 
 
@@ -575,15 +577,10 @@ def neighbourhood_li_loss(
         scales : kernel sizes for avg_pool2d (in pixels).
                  k=5 ≈ 20km, k=11 ≈ 44km at 4km/pixel resolution.
     """
-    # Operate on absolute values (residual + last_ctx) so the spatial
-    # consistency is measured relative to actual lightning presence,
-    # not relative to change from last context frame.
-    # For neighbourhood loss, last_ctx must be passed through training_loss.
-    pred_li   = pred[:, li_idx:li_idx+1]      # (B, 1, H, W) — residuals
-    target_li = target[:, li_idx:li_idx+1]    # spatial consistency on residuals is fine
-    # Note: spatial consistency on residuals is still meaningful — if the
-    # model produces a spatially smooth residual, the absolute prediction
-    # will also be spatially smooth. No last_ctx needed here ✓
+    # Spatial consistency on residuals is correct — a spatially smooth
+    # residual produces a spatially smooth absolute prediction.
+    pred_li   = pred[:, li_idx:li_idx+1]      # (B, 1, H, W)
+    target_li = target[:, li_idx:li_idx+1]
 
     loss = 0.0
     for k in scales:
@@ -627,22 +624,24 @@ def spectral_loss(
 
 
 def training_loss(
-    denoiser:       MultiStepDenoiser,
-    schedule:       EDMSchedule,
-    batch:          dict,
-    device:         torch.device,
-    cfg_drop_prob:  float = 0.15,
+    denoiser:           MultiStepDenoiser,
+    schedule:           EDMSchedule,
+    batch:              dict,
+    device:             torch.device,
+    cfg_drop_prob:      float = 0.15,
     # Channel weighting
-    li_weight:      float = 30.0,
-    li_weight_beta: float = 0.9999,
+    li_weight:          float = 30.0,
+    li_weight_beta:     float = 0.9999,
     # Asymmetric LI loss (Gao et al. 2022)
-    asym_weight:    float = 1.0,
-    asym_alpha:     float = 0.3,
+    asym_weight:        float = 1.0,
+    asym_alpha:         float = 0.1,
     # Neighbourhood spatial loss (Zhang et al. 2023)
-    nbr_weight:     float = 0.5,
-    nbr_scales:     List[int] = [5, 11],
+    nbr_weight:         float = 0.5,
+    nbr_scales:         List[int] = [5, 11],
     # Spectral loss on cloud channels
-    spectral_weight: float = 0.1,
+    spectral_weight:    float = 0.1,
+    # Lead-time weighted sampling
+    lead_time_weights:  Optional[List[float]] = None,
 ) -> torch.Tensor:
     """
     Composite training loss:
@@ -653,6 +652,14 @@ def training_loss(
     L_asymmetric   : asymmetric FP/FN pixel loss for LI (reduces FAR)
     L_neighbourhood: spatial consistency loss at multiple scales (improves FSS)
     L_spectral     : FFT magnitude loss on IR/cloud channels only (preserves texture)
+
+    lead_time_weights: optional per-step sampling probabilities (length=T_out).
+        Default None = uniform sampling across all lead steps.
+        Example [1,1,1,1,2,3] oversamples +50min and +60min 2× and 3× respectively.
+        Normalised internally to a probability distribution.
+        This is a pure data-side change — the loss function itself is unchanged.
+        Following curriculum/importance sampling principles to allocate more
+        gradient steps to harder long-range predictions.
     """
     context  = batch["context"].to(device)     # (B, T_in, C, H, W)
     target   = batch["target"].to(device)      # (B, T_out, C, H, W) residuals
@@ -663,8 +670,15 @@ def training_loss(
     # NOTE: li_idx=1 is hardcoded and must match args.channels order.
     # If channels=[ir,li,ch0,ch1] this is always correct.
 
-    # Sample one random lead step per batch item
-    lead_idx = torch.randint(0, T_out, (B,), device=device)
+    # Sample one lead step per batch item.
+    # lead_time_weights allows oversampling later (harder) steps to improve
+    # long-range skill without changing the loss function itself.
+    if lead_time_weights is not None:
+        w = torch.tensor(lead_time_weights, dtype=torch.float32, device=device)
+        w = w[:T_out] / w[:T_out].sum()   # normalise, truncate to T_out if needed
+        lead_idx = torch.multinomial(w.expand(B, -1), num_samples=1).squeeze(1)
+    else:
+        lead_idx = torch.randint(0, T_out, (B,), device=device)
     y        = target[torch.arange(B), lead_idx]       # (B, C, H, W)
     ch_mask  = tgt_mask[torch.arange(B), lead_idx]     # (B, C)
 
