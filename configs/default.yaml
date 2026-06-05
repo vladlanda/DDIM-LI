@@ -29,7 +29,7 @@ channels:
   - ch0
   - ch1
 
-T_in:    18         # context frames  (18 × 10 min = 3 hours)
+T_in:    36         # context frames  (18 × 10 min = 3 hours)
 T_out:   6          # forecast steps  (6  × 10 min = 1 hour)
 dt_min:  10
 img_size: [256, 256]
@@ -115,7 +115,7 @@ n_members:    1
 cfg_scale:    1.5
 
 output_dir:      outputs/nonelbo_chrono_256
-resume:          true
+resume:          false
 wandb_project:   "DDIM-LI"
 
 # LI event threshold for binarisation (evaluation only)

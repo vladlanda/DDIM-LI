@@ -21,7 +21,7 @@ output_dir:   outputs/nonelbo_chrono_256/eval
 # ----------------------------------------------------------
 # Ensemble sampling
 # ----------------------------------------------------------
-n_members:    8
+n_members:    10
 cfg_scale:    1.5
 num_steps:    20
 S_churn:      60.0
