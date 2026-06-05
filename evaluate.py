@@ -65,6 +65,8 @@ def generate_ensemble(
     cfg_scale:  float = 1.5,
     S_churn:    float = 40.0,
     S_noise:    float = 1.003,
+    sigma_min:  float = 0.002,
+    sigma_max:  float = 80.0,
 ) -> torch.Tensor:
     """
     Returns ensemble of shape (B, M, T_out, C, H, W).
@@ -105,8 +107,8 @@ def generate_ensemble(
             pred = edm_sampler(
                 denoiser_fn, (B, C, H, W), device,  # (B, C_data, H, W)
                 num_steps = num_steps,
-                sigma_min = 0.002,    # match training sigma_min from args
-                sigma_max = 80.0,
+                sigma_min = sigma_min,
+                sigma_max = sigma_max,
                 S_churn   = S_churn,
                 S_noise   = S_noise,
             )
@@ -1528,6 +1530,8 @@ def run_test_evaluation(args):
             S_churn   = args.S_churn,
             S_noise   = args.S_noise,
             num_steps = args.num_steps,
+            sigma_min = float(ckpt_args.get("sigma_min", 0.002)),
+            sigma_max = float(ckpt_args.get("sigma_max", 80.0)),
         )  # (B, M, T_out, C, H, W) residuals
 
         # Reconstruct absolute normalised frames before all metric computation
