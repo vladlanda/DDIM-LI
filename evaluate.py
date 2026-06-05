@@ -1504,6 +1504,7 @@ def run_test_evaluation(args):
     pr_labels = {t: [] for t in pr_steps}
     cal_probs  = {t: [] for t in pr_steps}
     cal_labels = {t: [] for t in pr_steps}
+    auc_by_step: dict = {}   # computed after all batches, before CSV row building
 
     os.makedirs(args.output_dir, exist_ok=True)
     if args.plot:
@@ -1639,6 +1640,18 @@ def run_test_evaluation(args):
     for ch in cloud_chs:
         is_cbrt = ch in stats and stats[ch].get("transform") == "cbrt"
         ch_unit[ch] = "norm" if is_cbrt else "K"
+
+    # Compute PR-AUC per step — always, not only inside the plot block
+    for t in pr_steps:
+        if not pr_probs[t]:
+            continue
+        try:
+            _all_prob = np.concatenate(pr_probs[t]).astype(np.float32)
+            _all_lbl  = np.concatenate(pr_labels[t]).astype(np.int32)
+            _prec, _rec, _ = _pr_curve(_all_lbl, _all_prob)
+            auc_by_step[t]  = float(_auc(_rec, _prec))
+        except Exception:
+            pass
 
     per_step = []
     for t in range(T_out):
