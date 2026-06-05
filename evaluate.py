@@ -1561,8 +1561,8 @@ def run_test_evaluation(args):
                                 ssim_by_ch_step[ch][t].append(cm[ch]["ssim"])
 
                 if li_idx is not None:
-                    # Convert to physical space; GT threshold is always > 0
-                    # (cbrt preserves zero, so > 0 unambiguously means lightning)
+                    # Convert to physical space and threshold at li_event_threshold
+                    # (default 5/255 — rejects denoiser background noise)
                     obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
                     ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
                                           for m in range(ens_t.shape[0])])
