@@ -92,6 +92,12 @@ nbr_scales:      [5, 11]   # kernel sizes in pixels (≈20km and ≈44km at 4km/
 # Spectral loss — applied to IR/cloud channels only (not LI)
 spectral_weight: 0.5
 
+# Lead-time weighted sampling
+# Oversample harder long-range steps to improve +60min skill.
+# Values are relative weights per step (normalised to probabilities).
+# Resume-compatible: not stored in checkpoint, set freely.
+lead_time_weights: [1, 1, 1, 2, 3, 4]   # +40m 2x, +50m 3x, +60m 4x vs +10m
+
 # Stratified sequence sampling
 oversample_factor:  5.0    # top-density sequences oversampled N×
 density_percentile: 75.0   # 75th percentile LI density threshold
