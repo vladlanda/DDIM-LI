@@ -426,7 +426,9 @@ def train(args):
             total_loss += loss.item()
 
             if main:
-                step_bar.set_postfix(loss=f"{loss.item():.4f}", refresh=False)
+                step_bar.set_postfix(loss=f"{loss.item():.4f}",
+                                     lr   = f"{sched.get_last_lr()[0]:.2e}",
+                                      refresh=False)
 
         sched.step()   # called after all opt.step()s in this epoch ✓
         avg_loss = total_loss / len(train_loader)

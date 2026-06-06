@@ -61,7 +61,7 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         300
+epochs:         400
 batch_size:     16
 lr:             2.0e-4
 weight_decay:   1.0e-4
@@ -76,7 +76,7 @@ num_workers:    4
 cfg_drop_prob:   0.15
 
 # Channel weighting — Cui et al. 2019 effective number formula
-li_weight:       20.0
+li_weight:       50.0
 li_weight_beta:  0.9999
 
 # Asymmetric FP/FN loss — Gao et al. 2022
@@ -121,7 +121,7 @@ n_members:    1
 cfg_scale:    1.5
 
 output_dir:      outputs/nonelbo_chrono_256
-resume:          false
+resume:          true
 wandb_project:   "DDIM-LI"
 
 # LI event threshold for binarisation (evaluation only)
