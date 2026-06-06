@@ -323,6 +323,12 @@ def train(args):
         ckpt = torch.load(ckpt_path, map_location=device)
         raw_model.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
+        # Reset optimizer LR to initial value — load_state_dict restores the
+        # LR at checkpoint time (e.g. 2e-7 at end of cosine cycle), which would
+        # prevent the warm restart. The scheduler will set the correct LR on
+        # its first step(), but we must reset param_groups first.
+        for pg in opt.param_groups:
+            pg["lr"] = args.lr
         if main and ema is not None and "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
         start_epoch = ckpt["epoch"] + 1
