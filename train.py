@@ -336,25 +336,26 @@ def train(args):
                     "Nothing to do — did you forget to increase --epochs?"
                 )
 
-    # Build scheduler AFTER resume.
-    # T_max = args.epochs = TOTAL epochs across all runs (not delta).
-    # When resuming: last_epoch = start_epoch - 1 positions the cosine curve
-    # at the correct point on the NEW T_max schedule.
+    # Build LR scheduler with warm restart semantics.
     #
-    # IMPORTANT: we do NOT restore the full sched state_dict from checkpoint
-    # because it contains the old T_max (e.g. 100), which would override the
-    # new T_max (e.g. 300) and corrupt the LR schedule.
-    # We only need last_epoch to correctly position on the cosine curve.
-    # Example: first run T_max=100 → resume T_max=300, start_epoch=100:
-    #   cos(π × 100/300) = cos(60°) → LR ≈ 0.75 × lr (correct mid-descent)
+    # T_max = remaining epochs (args.epochs - start_epoch).
+    # last_epoch = -1 always starts fresh from initial lr.
+    #
+    # This handles two cases correctly:
+    # 1. Fresh training: start_epoch=0, T_max=args.epochs, full cosine.
+    # 2. Resume/extend: start_epoch=300, epochs=400 → T_max=100, fresh cosine
+    #    over the new 100 epochs. Model gets a warm restart from lr → eta_min.
+    #
+    # This is equivalent to CosineAnnealingWarmRestarts where each training
+    # phase is a separate restart cycle. Avoids the trap of resuming at
+    # near-zero LR when the previous run completed its full cosine cycle.
+    remaining = args.epochs - start_epoch
     sched = CosineAnnealingLR(
         opt,
-        T_max      = args.epochs,         # total epochs, not delta
+        T_max      = max(remaining, 1),
         eta_min    = args.lr * 0.001,
-        last_epoch = start_epoch - 1,     # positions correctly on cosine curve
+        last_epoch = -1,                  # always start fresh from initial lr
     )
-    # Do NOT call sched.load_state_dict — it would restore old T_max and break
-    # the schedule when args.epochs differs from the checkpoint's epoch count.
 
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
