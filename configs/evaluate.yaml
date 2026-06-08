@@ -8,7 +8,7 @@
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-checkpoint:   outputs/nonelbo_chrono_256/best.pt
+checkpoint:   outputs/nonelbo_chrono_256/latest2.pt
 
 test_roots:
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_1
