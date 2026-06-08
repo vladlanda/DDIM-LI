@@ -515,6 +515,9 @@ def train(args):
                 "opt":      opt.state_dict(),
                 "sched":    sched.state_dict(),
                 "best_val": best_val,
+                "stats":    stats,
+                "channels": channels,
+                "args":     vars(args),
             }, ckpt_path)
 
             log_dict = {"epoch": epoch, "train_loss": avg_loss,
