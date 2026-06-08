@@ -1416,9 +1416,24 @@ def run_test_evaluation(args):
     from model import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule
 
     ckpt      = torch.load(args.checkpoint, map_location=device)
-    ckpt_args = ckpt["args"]
-    channels  = ckpt["channels"]
-    stats     = ckpt["stats"]
+    # Older checkpoints may not have "args" saved.
+    # Fall back to reading architecture params from evaluate.yaml / CLI args.
+    if "args" not in ckpt:
+        logger.warning(
+            "Checkpoint has no 'args' key — falling back to evaluate.yaml / CLI args. "
+            "Architecture params (base_channels, T_in, etc.) must match the checkpoint."
+        )
+        ckpt_args = vars(args)
+    else:
+        ckpt_args = ckpt["args"]
+
+    channels  = ckpt.get("channels", args.channels if hasattr(args, "channels") else ["ir","li","ch0","ch1"])
+    stats     = ckpt.get("stats",    None)
+    if stats is None:
+        raise RuntimeError(
+            "Checkpoint has no 'stats' key. Cannot denormalise predictions. "
+            "Please use a checkpoint saved by the current train.py."
+        )
     T_in      = ckpt_args["T_in"]
     T_out     = ckpt_args["T_out"]
     dt_min    = ckpt_args["dt_min"]
