@@ -426,7 +426,7 @@ class METSATDataset(Dataset):
             li_phys   = li_abs * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-            li_density = float((li_phys > 0).mean())  # fraction of non-zero pixels
+            li_density = float((li_phys >= 5.0/255.0).mean())  # aligned to li_event_threshold
         else:
             li_density = 0.0
 

@@ -110,7 +110,9 @@ class Upsample(nn.Module):
         self.conv = nn.Conv2d(channels, channels, 3, padding=1)
 
     def forward(self, x):
-        return F.interpolate(x, scale_factor=2, mode="nearest")
+        # Standard nearest-upsample + conv (learned anti-aliasing).
+        # F.interpolate alone is correct but the conv refines the result.
+        return self.conv(F.interpolate(x, scale_factor=2, mode="nearest"))
 
 
 # ===================================================================
