@@ -61,10 +61,10 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         400
+epochs:         300
 batch_size:     16
 lr:             2.0e-4
-weight_decay:   1.0e-4
+weight_decay:   0.0               # EMA already regularises (Karras 2022)
 grad_clip:      1.0
 ema_decay:      0.9999
 amp:            true
@@ -76,17 +76,17 @@ num_workers:    4
 cfg_drop_prob:   0.15
 
 # Channel weighting — Cui et al. 2019 effective number formula
-li_weight:       50.0
+li_weight:       20.0
 li_weight_beta:  0.9999
 
 # Asymmetric FP/FN loss — Gao et al. 2022
 # Reduces FAR by penalising false positives less than false negatives early in training
 asym_weight:     1.0
-asym_alpha:      0.1    # FP penalised at 10% of FN cost; anneal toward 1.0 manually
+asym_alpha:      0.05   # FP penalised at 5% of FN cost — more aggressive with LI in ctx
 
 # Neighbourhood spatial loss — Zhang et al. 2023
 # Penalises spatial displacement; directly improves FSS
-nbr_weight:      0.3
+nbr_weight:      0.5               # increased: residuals smaller with LI in context
 nbr_scales:      [5, 11]   # kernel sizes in pixels (≈20km and ≈44km at 4km/px)
 
 # Spectral loss — applied to IR/cloud channels only (not LI)
@@ -96,7 +96,7 @@ spectral_weight: 0.5
 # Oversample harder long-range steps to improve +60min skill.
 # Values are relative weights per step (normalised to probabilities).
 # Resume-compatible: not stored in checkpoint, set freely.
-lead_time_weights: [1, 1, 1, 2, 3, 4]   # +40m 2x, +50m 3x, +60m 4x vs +10m
+lead_time_weights: null            # uniform — oversampling showed no benefit
 
 # Stratified sequence sampling
 oversample_factor:  5.0    # top-density sequences oversampled N×
@@ -104,12 +104,12 @@ density_percentile: 75.0   # 75th percentile LI density threshold
 
 # Binary LI context channel — Ravuri et al. 2021
 # Appends (li >= 1/255) as extra channel to each context frame
-binary_li_ctx:   false
+binary_li_ctx:   true              # explicit binary LI mask per context frame
 
 # ctx_channels: which channels to include in context (null = all channels)
 # To exclude LI from context and force prediction from IR alone:
 #   ctx_channels: [ir, ch0, ch1] or null
-ctx_channels:    [ir, ch0, ch1]
+ctx_channels:    null              # all channels — LI included in context
 
 # ----------------------------------------------------------
 # Validation & logging
@@ -120,8 +120,8 @@ val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nonelbo_chrono_256
-resume:          true
+output_dir:      outputs/nonelbo_v6_256_T36_LIctx
+resume:          false             # new architecture: in_ch 116→188
 wandb_project:   "DDIM-LI"
 
 # LI event threshold for binarisation (evaluation only)
