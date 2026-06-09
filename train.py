@@ -309,9 +309,9 @@ def train(args):
     if ddp_active() and world_size > 1:
         model = DDP(
             model,
-            device_ids          = [local_rank],
-            output_device       = local_rank,
-            find_unused_parameters = True,
+            device_ids             = [local_rank],
+            output_device          = local_rank,
+            find_unused_parameters = False,  # all params used every step
         )
 
     # EMA lives only on rank 0 (no need to sync across GPUs)
