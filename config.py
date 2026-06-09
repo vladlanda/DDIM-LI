@@ -84,6 +84,10 @@ def add_arguments(parser: argparse.ArgumentParser):
                         help="Base LI channel upweight. Dynamic per-sample scaling applied on top.")
     parser.add_argument("--li_weight_beta",   type=float, default=0.9999,
                         help="Beta for Cui et al. 2019 effective number formula.")
+    parser.add_argument("--li_weight_ref_density", type=float, default=0.05,
+                        help="Reference LI density for Cui et al. weighting. "
+                             "base_weight applies at this density. "
+                             "Set to mean LI density of training set (~0.06).")
     # -- Asymmetric FP/FN loss (Gao et al. 2022) --
     parser.add_argument("--asym_weight",     type=float, default=1.0,
                         help="Weight for asymmetric LI loss term.")

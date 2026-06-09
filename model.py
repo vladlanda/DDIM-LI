@@ -465,6 +465,7 @@ def effective_li_weight(
     beta:        float = 0.9999,
     min_weight:  float = 1.0,
     max_weight:  float = 200.0,
+    ref_density: float = 0.05,
 ) -> torch.Tensor:
     """
     Per-sample dynamic LI channel weight using the Effective Number of Samples
@@ -478,7 +479,7 @@ def effective_li_weight(
     eps   = 1e-6
     n     = li_density.clamp(min=eps)
     E_n   = (1.0 - beta ** n)    / (1.0 - beta)
-    E_ref = (1.0 - beta ** 0.05) / (1.0 - beta)
+    E_ref = (1.0 - beta ** ref_density) / (1.0 - beta)
     w     = base_weight * (E_ref / E_n)
     w     = torch.where(li_density < eps, torch.ones_like(w), w)
     return w.clamp(min_weight, max_weight)
@@ -634,6 +635,7 @@ def training_loss(
     # Channel weighting
     li_weight:          float = 30.0,
     li_weight_beta:     float = 0.9999,
+    li_weight_ref_density: float = 0.05,
     # Asymmetric LI loss (Gao et al. 2022)
     asym_weight:        float = 1.0,
     asym_alpha:         float = 0.1,
@@ -710,8 +712,9 @@ def training_loss(
     if "li_density" in batch:
         dyn_w = effective_li_weight(
             batch["li_density"].to(device),
-            base_weight = li_weight,
-            beta        = li_weight_beta,
+            base_weight  = li_weight,
+            beta         = li_weight_beta,
+            ref_density  = li_weight_ref_density,
         )
     else:
         dyn_w = li_weight

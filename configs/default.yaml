@@ -66,7 +66,9 @@ batch_size:     16
 lr:             2.0e-4
 weight_decay:   0.0               # EMA already regularises (Karras 2022)
 grad_clip:      1.0
-ema_decay:      0.9999
+ema_decay:      0.999991          # ~10-epoch half-life at 7400 steps/epoch
+                                  # ema_decay=0.9999 designed for ~100 steps/epoch
+                                  # = 0.94-epoch half-life on full dataset (too fast)
 amp:            true
 num_workers:    4
 
@@ -78,6 +80,7 @@ cfg_drop_prob:   0.15
 # Channel weighting — Cui et al. 2019 effective number formula
 li_weight:       20.0
 li_weight_beta:  0.9999
+li_weight_ref_density: 0.06     # mean LI density of training set (measured)
 
 # Asymmetric FP/FN loss — Gao et al. 2022
 # Reduces FAR by penalising false positives less than false negatives early in training

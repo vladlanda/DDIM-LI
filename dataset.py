@@ -382,7 +382,10 @@ class METSATDataset(Dataset):
                 continue
             img = Image.open(chs[ch]).convert("L")
             if img.size != (w, h):
-                img = img.resize((w, h), Image.BILINEAR)
+                # LI channel contains integer flash counts — use NEAREST to
+                # preserve integer nature. IR/cloud are continuous → BILINEAR.
+                resize_method = Image.NEAREST if ch == "li" else Image.BILINEAR
+                img = img.resize((w, h), resize_method)
             arr = np.frombuffer(img.tobytes(), dtype=np.uint8).reshape(h, w)
             frame[i] = arr.astype(np.float32) * (1.0 / 255.0)
             mask[i]  = 1.0
