@@ -287,6 +287,22 @@ def train(args):
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
         logger.info(f"Model params: {n_params:.1f}M")
 
+    # Compute normalised threshold for asymmetric_li_loss from li_event_threshold.
+    # li_event_threshold is in physical space [0,1]. Convert:
+    #   physical → cbrt → z-score using per-dataset LI statistics
+    # This ensures training threshold matches evaluation threshold exactly.
+    _li_thresh = getattr(args, "li_event_threshold", 5.0/255.0)
+    if "li" in channels and "li" in stats:
+        _cbrt   = float(_li_thresh ** (1.0/3.0))
+        _mean   = stats["li"]["mean"]
+        _std    = stats["li"]["std"]
+        asym_norm_threshold = (_cbrt - _mean) / _std
+    else:
+        asym_norm_threshold = 0.16  # fallback
+    if main:
+        logger.info(f"asym_norm_threshold = {asym_norm_threshold:.4f} "
+                    f"(from li_event_threshold={_li_thresh:.5f})")
+
     # find_unused_parameters=True required because attention layers at specific
     # resolutions may not activate for every batch (e.g. when spatial dims
     # don't pass through attn_resolutions). Small performance cost is acceptable.
@@ -401,19 +417,21 @@ def train(args):
 
             with autocast('cuda', enabled=args.amp):
                 loss = training_loss(
-                    denoiser         = model,
-                    schedule         = schedule,
-                    batch            = batch,
-                    device           = device,
-                    cfg_drop_prob    = args.cfg_drop_prob,
-                    li_weight        = args.li_weight,
-                    li_weight_beta   = args.li_weight_beta,
-                    asym_weight      = args.asym_weight,
-                    asym_alpha       = args.asym_alpha,
-                    nbr_weight       = args.nbr_weight,
-                    nbr_scales       = args.nbr_scales,
-                    spectral_weight     = args.spectral_weight,
-                    lead_time_weights   = args.lead_time_weights,
+                    denoiser             = model,
+                    schedule             = schedule,
+                    batch                = batch,
+                    device               = device,
+                    cfg_drop_prob        = args.cfg_drop_prob,
+                    li_weight            = args.li_weight,
+                    li_weight_beta       = args.li_weight_beta,
+                    asym_weight          = args.asym_weight,
+                    asym_alpha           = args.asym_alpha,
+                    asym_norm_threshold  = asym_norm_threshold,
+                    nbr_weight           = args.nbr_weight,
+                    nbr_scales           = args.nbr_scales,
+                    spectral_weight      = args.spectral_weight,
+                    lead_time_weights    = args.lead_time_weights,
+                    channels             = channels,
                 )
 
             scaler.scale(loss).backward()

@@ -637,6 +637,7 @@ def training_loss(
     # Asymmetric LI loss (Gao et al. 2022)
     asym_weight:        float = 1.0,
     asym_alpha:         float = 0.1,
+    asym_norm_threshold: float = 0.16,  # normalised equivalent of li_event_threshold
     # Neighbourhood spatial loss (Zhang et al. 2023)
     nbr_weight:         float = 0.5,
     nbr_scales:         List[int] = [5, 11],
@@ -644,6 +645,8 @@ def training_loss(
     spectral_weight:    float = 0.1,
     # Lead-time weighted sampling
     lead_time_weights:  Optional[List[float]] = None,
+    # Channel config
+    channels:           Optional[List[str]] = None,
 ) -> torch.Tensor:
     """
     Composite training loss:
@@ -668,9 +671,11 @@ def training_loss(
     tgt_mask = batch["tgt_mask"].to(device)    # (B, T_out, C)
 
     B, T_out, C, H, W = target.shape
-    li_idx = 1   # ir=0, li=1, ch0=2, ch1=3
-    # NOTE: li_idx=1 is hardcoded and must match args.channels order.
-    # If channels=[ir,li,ch0,ch1] this is always correct.
+    # Derive li_idx from channels list if provided, else fall back to hardcoded 1
+    if channels is not None and "li" in channels:
+        li_idx = channels.index("li")
+    else:
+        li_idx = 1   # default: ir=0, li=1, ch0=2, ch1=3
 
     # Sample one lead step per batch item.
     # lead_time_weights allows oversampling later (harder) steps to improve
@@ -719,7 +724,7 @@ def training_loss(
     # "no change from context frame" (which residual=0 would mean).
     last_ctx = batch["last_ctx"].to(device)   # (B, C, H, W)
     L_asym = asymmetric_li_loss(pred, y, last_ctx, alpha=asym_alpha, li_idx=li_idx,
-                                norm_threshold=0.16)  # ≈ 5/255 physical
+                                norm_threshold=asym_norm_threshold)
 
     # ── L_neighbourhood: spatial consistency at 2 scales ─────────────
     L_nbr = neighbourhood_li_loss(pred, y, li_idx=li_idx, scales=nbr_scales)
