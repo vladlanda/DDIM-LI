@@ -1,7 +1,7 @@
 """
 Two-panel comparison figure:
-  LEFT  — Reliability / calibration diagram (model solid, persistence dashed)
-  RIGHT — Precision-Recall curves        (model solid, persistence dashed)
+  LEFT  — Precision-Recall curves        (model solid, persistence dashed)
+  RIGHT — Reliability / calibration diagram (model solid, persistence dashed)
 
 Both panels color-matched by lead time. All axes, ticks, labels and legend
 text are bold.
@@ -95,7 +95,7 @@ def main():
     colors = {t: cmap(0.12 + 0.76 * i / max(len(steps)-1, 1))
               for i, t in enumerate(steps)}
 
-    fig, (ax_cal, ax_pr) = plt.subplots(1, 2, figsize=(15, 7))
+    fig, (ax_pr, ax_cal) = plt.subplots(1, 2, figsize=(15, 7))
 
     # ── LEFT: Reliability / calibration diagram ──────────────────────
     ax_cal.plot([0, 1], [0, 1], "k--", lw=2.0, label="Perfect calibration")
