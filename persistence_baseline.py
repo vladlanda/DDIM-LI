@@ -204,8 +204,9 @@ def run_persistence_evaluation(args):
                     pr_probs[t].append(flat_prob)
                     pr_labels[t].append(flat_lbl)
 
-    # ── Compute PR-AUC
+    # ── Compute PR-AUC + save full PR curves for overlay plotting
     auc_by_step = {}
+    pr_curves   = {}   # t -> (precision, recall) arrays for dashed overlay
     for t in pr_steps:
         if not pr_probs[t]:
             continue
@@ -214,8 +215,21 @@ def run_persistence_evaluation(args):
             all_lbl  = np.concatenate(pr_labels[t]).astype(np.int32)
             prec, rec, _ = _pr_curve(all_lbl, all_prob)
             auc_by_step[t] = float(_auc(rec, prec))
+            pr_curves[t]   = (prec.astype(np.float32), rec.astype(np.float32))
         except Exception as e:
             logger.warning(f"PR-AUC failed at step {t}: {e}")
+
+    # Save persistence PR curves to npz for overlay on the model's PR plot.
+    npz_payload = {}
+    for t, (prec, rec) in pr_curves.items():
+        npz_payload[f"prec_{t}"] = prec
+        npz_payload[f"rec_{t}"]  = rec
+        npz_payload[f"auc_{t}"]  = np.array(auc_by_step.get(t, float("nan")))
+    npz_payload["pr_steps"] = np.array(list(pr_curves.keys()))
+    npz_payload["dt_min"]   = np.array(dt_min)
+    pr_npz = os.path.join(args.output_dir, "persistence_pr_curves.npz")
+    np.savez_compressed(pr_npz, **npz_payload)
+    logger.info(f"Persistence PR curves -> {pr_npz}")
 
     # ── Build per-step CSV rows
     _mean = lambda lst: float(np.mean(lst)) if lst else float("nan")
