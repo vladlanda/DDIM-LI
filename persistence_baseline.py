@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from sklearn.metrics import precision_recall_curve as _pr_curve
+    from sklearn.calibration import calibration_curve as _cal_curve
     from sklearn.metrics import auc as _auc
 except ImportError:
     raise ImportError("scikit-learn required: pip install scikit-learn")
@@ -219,17 +220,27 @@ def run_persistence_evaluation(args):
         except Exception as e:
             logger.warning(f"PR-AUC failed at step {t}: {e}")
 
-    # Save persistence PR curves to npz for overlay on the model's PR plot.
+    # Save persistence PR + calibration curves to npz for overlay plots.
     npz_payload = {}
     for t, (prec, rec) in pr_curves.items():
         npz_payload[f"prec_{t}"] = prec
         npz_payload[f"rec_{t}"]  = rec
         npz_payload[f"auc_{t}"]  = np.array(auc_by_step.get(t, float("nan")))
+        # Calibration curve from the same prob/label data
+        try:
+            all_prob = np.concatenate(pr_probs[t]).astype(np.float32)
+            all_lbl  = np.concatenate(pr_labels[t]).astype(np.int32)
+            frac_pos, mean_pred = _cal_curve(all_lbl, all_prob,
+                                             n_bins=10, strategy="uniform")
+            npz_payload[f"cal_mean_{t}"] = mean_pred.astype(np.float32)
+            npz_payload[f"cal_frac_{t}"] = frac_pos.astype(np.float32)
+        except Exception as e:
+            logger.warning(f"Persistence calibration failed at step {t}: {e}")
     npz_payload["pr_steps"] = np.array(list(pr_curves.keys()))
     npz_payload["dt_min"]   = np.array(dt_min)
     pr_npz = os.path.join(args.output_dir, "persistence_pr_curves.npz")
     np.savez_compressed(pr_npz, **npz_payload)
-    logger.info(f"Persistence PR curves -> {pr_npz}")
+    logger.info(f"Persistence PR + calibration curves -> {pr_npz}")
 
     # ── Build per-step CSV rows
     _mean = lambda lst: float(np.mean(lst)) if lst else float("nan")

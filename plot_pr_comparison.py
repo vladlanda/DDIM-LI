@@ -1,11 +1,14 @@
 """
-Overlay model PR curves (solid) with persistence PR curves (dashed)
-on a single plot, color-matched by lead time.
+Two-panel comparison figure:
+  LEFT  — Reliability / calibration diagram (model solid, persistence dashed)
+  RIGHT — Precision-Recall curves        (model solid, persistence dashed)
+
+Both panels color-matched by lead time. All axes, ticks, labels and legend
+text are bold.
 
 Requires:
-  - model plot data:        <model_output_dir>/plot_data.npz   (from evaluate.py)
+  - model plot data:        <model_output_dir>/plot_data.npz
   - persistence PR curves:  <persist_output_dir>/persistence_pr_curves.npz
-                            (from persistence_baseline.py)
 
 Usage:
   python plot_pr_comparison.py \
@@ -19,38 +22,62 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
 from sklearn.metrics import precision_recall_curve, auc
+from sklearn.calibration import calibration_curve
 
 
-def load_model_pr(npz_path):
-    """Extract per-step PR curves from the model's plot_data.npz."""
+# ── Global bold styling ───────────────────────────────────────────────
+rcParams["font.weight"]        = "bold"
+rcParams["axes.labelweight"]   = "bold"
+rcParams["axes.titleweight"]   = "bold"
+rcParams["axes.linewidth"]     = 2.0
+rcParams["xtick.major.width"]  = 2.0
+rcParams["ytick.major.width"]  = 2.0
+
+
+def _bold_ticks(ax):
+    for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+        lbl.set_fontweight("bold")
+
+
+def load_model(npz_path):
+    """Extract per-step PR + calibration data from model plot_data.npz."""
     data = np.load(npz_path, allow_pickle=True)
     pr_steps = data["pr_steps"].tolist()
     dt_min   = int(data["dt_min"]) if "dt_min" in data else 10
-    curves = {}
+    pr, cal = {}, {}
     for t in pr_steps:
-        # plot_data.npz stores raw probs/labels as pr_prob_{t} / pr_label_{t}
         if f"pr_prob_{t}" in data and f"pr_label_{t}" in data:
             prob = data[f"pr_prob_{t}"]
             lbl  = data[f"pr_label_{t}"]
             prec, rec, _ = precision_recall_curve(lbl, prob)
-            curves[t] = (prec, rec, float(auc(rec, prec)))
-    return curves, dt_min
+            pr[t] = (prec, rec, float(auc(rec, prec)))
+        if f"cal_prob_{t}" in data and f"cal_label_{t}" in data:
+            cprob = data[f"cal_prob_{t}"]
+            clbl  = data[f"cal_label_{t}"]
+            try:
+                frac_pos, mean_pred = calibration_curve(
+                    clbl, cprob, n_bins=10, strategy="uniform")
+                cal[t] = (mean_pred, frac_pos)
+            except Exception:
+                pass
+    return pr, cal, dt_min
 
 
-def load_persist_pr(npz_path):
-    """Extract persistence PR curves saved by persistence_baseline.py."""
+def load_persist(npz_path):
+    """Extract persistence PR (and calibration if present)."""
     data = np.load(npz_path, allow_pickle=True)
     pr_steps = data["pr_steps"].tolist()
     dt_min   = int(data["dt_min"]) if "dt_min" in data else 10
-    curves = {}
+    pr, cal = {}, {}
     for t in pr_steps:
         if f"prec_{t}" in data and f"rec_{t}" in data:
-            prec = data[f"prec_{t}"]
-            rec  = data[f"rec_{t}"]
-            a    = float(data[f"auc_{t}"]) if f"auc_{t}" in data else float("nan")
-            curves[t] = (prec, rec, a)
-    return curves, dt_min
+            a = float(data[f"auc_{t}"]) if f"auc_{t}" in data else float("nan")
+            pr[t] = (data[f"prec_{t}"], data[f"rec_{t}"], a)
+        if f"cal_mean_{t}" in data and f"cal_frac_{t}" in data:
+            cal[t] = (data[f"cal_mean_{t}"], data[f"cal_frac_{t}"])
+    return pr, cal, dt_min
 
 
 def main():
@@ -60,46 +87,70 @@ def main():
     p.add_argument("--out", default="pr_comparison.png")
     args = p.parse_args()
 
-    model_curves,   dt_min  = load_model_pr(args.model_npz)
-    persist_curves, _       = load_persist_pr(args.persist_npz)
+    m_pr, m_cal, dt_min = load_model(args.model_npz)
+    p_pr, p_cal, _      = load_persist(args.persist_npz)
 
-    steps  = sorted(model_curves.keys())
-    # Color map matched to lead time (same scheme as the existing plot:
-    # dark purple → dark red across lead times)
+    steps  = sorted(m_pr.keys())
     cmap   = plt.cm.turbo
     colors = {t: cmap(0.12 + 0.76 * i / max(len(steps)-1, 1))
               for i, t in enumerate(steps)}
 
-    fig, ax = plt.subplots(figsize=(8, 7))
+    fig, (ax_cal, ax_pr) = plt.subplots(1, 2, figsize=(15, 7))
 
+    # ── LEFT: Reliability / calibration diagram ──────────────────────
+    ax_cal.plot([0, 1], [0, 1], "k--", lw=2.0, label="Perfect calibration")
     for t in steps:
         lead = (t + 1) * dt_min
         c    = colors[t]
+        if t in m_cal:
+            mean_pred, frac_pos = m_cal[t]
+            ax_cal.plot(mean_pred, frac_pos, color=c, lw=2.4, marker="o",
+                        markersize=5, linestyle="-",
+                        label=f"+{lead}m model")
+        if t in p_cal:
+            mp, fp = p_cal[t]
+            ax_cal.plot(mp, fp, color=c, lw=1.8, marker="s",
+                        markersize=4, linestyle="--", alpha=0.7,
+                        label=f"+{lead}m persist")
 
-        # Model — solid line
-        prec_m, rec_m, auc_m = model_curves[t]
-        ax.plot(rec_m, prec_m, color=c, lw=2.0, linestyle="-",
-                label=f"+{lead}m model  AUC={auc_m:.2f}")
+    ax_cal.set_xlabel("Mean Predicted Probability", fontsize=13, fontweight="bold")
+    ax_cal.set_ylabel("Observed Frequency", fontsize=13, fontweight="bold")
+    ax_cal.set_title("Reliability Diagram", fontsize=15, fontweight="bold")
+    ax_cal.set_xlim(0, 1); ax_cal.set_ylim(0, 1)
+    ax_cal.grid(True, alpha=0.3)
+    leg1 = ax_cal.legend(fontsize=9, loc="upper left", framealpha=0.9)
+    for txt in leg1.get_texts():
+        txt.set_fontweight("bold")
+    _bold_ticks(ax_cal)
 
-        # Persistence — dashed line, same color
-        if t in persist_curves:
-            prec_p, rec_p, auc_p = persist_curves[t]
-            ax.plot(rec_p, prec_p, color=c, lw=1.6, linestyle="--",
-                    alpha=0.75,
-                    label=f"+{lead}m persist  AUC={auc_p:.2f}")
+    # ── RIGHT: Precision-Recall curves ───────────────────────────────
+    for t in steps:
+        lead = (t + 1) * dt_min
+        c    = colors[t]
+        prec_m, rec_m, auc_m = m_pr[t]
+        ax_pr.plot(rec_m, prec_m, color=c, lw=2.4, linestyle="-",
+                   label=f"+{lead}m model  AUC={auc_m:.2f}")
+        if t in p_pr:
+            prec_p, rec_p, auc_p = p_pr[t]
+            ax_pr.plot(rec_p, prec_p, color=c, lw=1.8, linestyle="--",
+                       alpha=0.7,
+                       label=f"+{lead}m persist  AUC={auc_p:.2f}")
 
-    ax.set_xlabel("Recall (POD)", fontsize=12)
-    ax.set_ylabel("Precision (1 − FAR)", fontsize=12)
-    ax.set_title("Precision–Recall: Model (solid) vs Persistence (dashed)",
-                 fontsize=13, fontweight="bold")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8, ncol=2, loc="upper right", framealpha=0.9)
+    ax_pr.set_xlabel("Recall (POD)", fontsize=13, fontweight="bold")
+    ax_pr.set_ylabel("Precision (1 - FAR)", fontsize=13, fontweight="bold")
+    ax_pr.set_title("Precision-Recall Curves", fontsize=15, fontweight="bold")
+    ax_pr.set_xlim(0, 1); ax_pr.set_ylim(0, 1)
+    ax_pr.grid(True, alpha=0.3)
+    leg2 = ax_pr.legend(fontsize=8, ncol=2, loc="upper right", framealpha=0.9)
+    for txt in leg2.get_texts():
+        txt.set_fontweight("bold")
+    _bold_ticks(ax_pr)
 
-    fig.tight_layout()
+    fig.suptitle("Model (solid) vs Persistence (dashed) - All 6 Lead Times",
+                 fontsize=16, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(args.out, dpi=200, bbox_inches="tight")
-    print(f"Saved → {args.out}")
+    print(f"Saved -> {args.out}")
 
 
 if __name__ == "__main__":
