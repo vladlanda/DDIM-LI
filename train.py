@@ -335,49 +335,73 @@ def train(args):
     best_val    = float("inf")
     ckpt_path   = os.path.join(args.output_dir, "latest.pt")
 
+    resume_mode = None   # 'recover' | 'extend' | None
     if args.resume and os.path.exists(ckpt_path):
         ckpt = torch.load(ckpt_path, map_location=device)
         raw_model.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
-        # Reset optimizer LR to initial value — load_state_dict restores the
-        # LR at checkpoint time (e.g. 2e-7 at end of cosine cycle), which would
-        # prevent the warm restart. The scheduler will set the correct LR on
-        # its first step(), but we must reset param_groups first.
-        for pg in opt.param_groups:
-            pg["lr"] = args.lr
         if main and ema is not None and "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
         start_epoch = ckpt["epoch"] + 1
         best_val    = ckpt.get("best_val", best_val)
+
+        # Distinguish CRASH RECOVERY from intentional EXTENSION by comparing
+        # the epoch we stopped at against the ORIGINAL epochs target stored
+        # in the checkpoint's args.
+        prev_epochs = ckpt.get("args", {}).get("epochs", args.epochs)
+        if start_epoch < prev_epochs:
+            resume_mode = "recover"   # stopped mid-run (e.g. power loss)
+        else:
+            resume_mode = "extend"    # previous run completed its full schedule
+
         if main:
             logger.info(f"Resumed from epoch {start_epoch - 1} "
-                        f"(continuing to epoch {args.epochs - 1})")
+                        f"(mode={resume_mode}, prev_epochs={prev_epochs}, "
+                        f"target={args.epochs})")
             if start_epoch >= args.epochs:
                 logger.warning(
                     f"start_epoch ({start_epoch}) >= args.epochs ({args.epochs}). "
-                    "Nothing to do — did you forget to increase --epochs?"
+                    "Nothing to do — increase --epochs to extend training."
                 )
 
-    # Build LR scheduler with warm restart semantics.
+    # ── Build LR scheduler according to resume mode ──────────────────────
     #
-    # T_max = remaining epochs (args.epochs - start_epoch).
-    # last_epoch = -1 always starts fresh from initial lr.
+    # RECOVERY (mid-run crash): continue the ORIGINAL cosine curve exactly.
+    #   T_max = original total epochs, last_epoch positions on that curve.
+    #   The LR resumes at the value it had when training stopped — NO spike.
     #
-    # This handles two cases correctly:
-    # 1. Fresh training: start_epoch=0, T_max=args.epochs, full cosine.
-    # 2. Resume/extend: start_epoch=300, epochs=400 → T_max=100, fresh cosine
-    #    over the new 100 epochs. Model gets a warm restart from lr → eta_min.
+    # EXTEND (completed run, more epochs requested): warm restart.
+    #   T_max = remaining new epochs, fresh cosine from args.lr → eta_min.
+    #   Lets a converged model escape its minimum (Loshchilov & Hutter 2017).
     #
-    # This is equivalent to CosineAnnealingWarmRestarts where each training
-    # phase is a separate restart cycle. Avoids the trap of resuming at
-    # near-zero LR when the previous run completed its full cosine cycle.
-    remaining = args.epochs - start_epoch
-    sched = CosineAnnealingLR(
-        opt,
-        T_max      = max(remaining, 1),
-        eta_min    = args.lr * 0.001,
-        last_epoch = -1,                  # always start fresh from initial lr
-    )
+    # FRESH (no resume): standard full cosine over args.epochs.
+    if resume_mode == "recover":
+        prev_epochs = ckpt.get("args", {}).get("epochs", args.epochs)
+        sched = CosineAnnealingLR(
+            opt,
+            T_max      = prev_epochs,        # ORIGINAL schedule length
+            eta_min    = args.lr * 0.001,
+            last_epoch = start_epoch - 1,    # continue from where we stopped
+        )
+        # Do NOT reset optimizer LR — we want the exact LR from the crash point.
+        if main:
+            logger.info(f"  Crash recovery: continuing cosine "
+                        f"at epoch {start_epoch}/{prev_epochs}, "
+                        f"LR={sched.get_last_lr()[0]:.3e}")
+    else:
+        # extend or fresh → warm restart from args.lr over remaining epochs
+        for pg in opt.param_groups:
+            pg["lr"] = args.lr
+        remaining = args.epochs - start_epoch
+        sched = CosineAnnealingLR(
+            opt,
+            T_max      = max(remaining, 1),
+            eta_min    = args.lr * 0.001,
+            last_epoch = -1,                 # fresh cosine from initial lr
+        )
+        if main and resume_mode == "extend":
+            logger.info(f"  Extension: warm restart from LR={args.lr:.3e} "
+                        f"over {remaining} new epochs")
 
     # ----- WandB (rank 0 only) -----
     if main and HAS_WANDB and args.wandb_project:
