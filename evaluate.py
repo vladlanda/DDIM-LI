@@ -67,10 +67,18 @@ def generate_ensemble(
     S_noise:    float = 1.003,
     sigma_min:  float = 0.002,
     sigma_max:  float = 80.0,
+    churn_lead_scale: float = 0.0,
 ) -> torch.Tensor:
     """
     Returns ensemble of shape (B, M, T_out, C, H, W).
     Uses classifier-free guidance: final = uncond + cfg_scale*(cond - uncond)
+
+    churn_lead_scale: linearly increases S_churn with lead step to counter
+        ensemble under-dispersion at long lead times. Effective churn for
+        step t (0-indexed) is:
+            S_churn_t = S_churn * (1 + churn_lead_scale * t / (T_out - 1))
+        churn_lead_scale=0 → constant churn (original behaviour).
+        churn_lead_scale=1 → churn doubles from first to last lead step.
     """
     model.eval()
     B, T_in, C_ctx, H, W = context.shape
@@ -104,12 +112,17 @@ def generate_ensemble(
                 uncond = model(x, sigma, torch.zeros_like(context), ch_mask, _lead_idx)
                 return uncond + cfg_scale * (cond - uncond)
 
+            # Lead-time-scaled churn: more stochasticity at longer lead times
+            # to counter ensemble under-dispersion (spread-skill drops with lead).
+            frac = step / max(T_out - 1, 1)
+            S_churn_step = S_churn * (1.0 + churn_lead_scale * frac)
+
             pred = edm_sampler(
                 denoiser_fn, (B, C, H, W), device,  # (B, C_data, H, W)
                 num_steps = num_steps,
                 sigma_min = sigma_min,
                 sigma_max = sigma_max,
-                S_churn   = S_churn,
+                S_churn   = S_churn_step,
                 S_noise   = S_noise,
             )
             all_steps.append(pred)
@@ -1547,6 +1560,7 @@ def run_test_evaluation(args):
             num_steps = args.num_steps,
             sigma_min = float(ckpt_args.get("sigma_min", 0.002)),
             sigma_max = float(ckpt_args.get("sigma_max", 80.0)),
+            churn_lead_scale = float(getattr(args, "churn_lead_scale", 0.0)),
         )  # (B, M, T_out, C, H, W) residuals
 
         # Reconstruct absolute normalised frames before all metric computation
@@ -1869,6 +1883,10 @@ if __name__ == "__main__":
     p.add_argument("--n_members",     type=int,   default=10,
                    help="Ensemble members (more = slower but better CRPS)")
     p.add_argument("--cfg_scale",     type=float, default=1.5)
+    p.add_argument("--churn_lead_scale", type=float, default=0.0,
+                   help="Linearly scale S_churn with lead time to counter "
+                        "ensemble under-dispersion. 0=constant, 1=doubles "
+                        "from first to last lead step.")
     p.add_argument("--S_churn",       type=float, default=40.0,
                    help="EDM stochastic churn. 0=deterministic, 40=moderate, 80=high.")
     p.add_argument("--S_noise",       type=float, default=1.003)
