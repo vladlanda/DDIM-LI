@@ -58,9 +58,9 @@ def main():
         for s in fss_scales:
             key = f"fss_thr{thr}_s{s}"
             if key in data:
-                arr = data[key]
-                # arr is per-sequence; index t may be embedded — take mean
-                val = float(np.mean(arr)) if arr.ndim == 0 else float(np.nanmean(arr))
+                arr = data[key]   # shape (T_out,) — FSS per lead step
+                # Index the CURRENT lead step t, not the mean over all steps
+                val = float(arr[t]) if arr.ndim >= 1 and arr.shape[0] > t else float(arr)
                 fss_by_scale.append(val)
             else:
                 fss_by_scale.append(np.nan)
