@@ -27,6 +27,7 @@ import logging
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -185,7 +186,11 @@ def main():
                             num_workers=args.num_workers, pin_memory=True)
 
     ss_accum = [[] for _ in range(T_out)]
-    for i, batch in enumerate(val_loader):
+    n_batches = min(len(val_loader), args.max_batches)
+    batch_bar = tqdm(val_loader, total=n_batches,
+                     desc="Validation batches", unit="batch",
+                     dynamic_ncols=True)
+    for i, batch in enumerate(batch_bar):
         context  = batch["context"].to(device)
         target   = batch["target"].to(device)
         ch_mask  = batch["tgt_mask"][:, 0].to(device)
@@ -201,8 +206,13 @@ def main():
         for b in range(ens_np.shape[0]):
             for t in range(T_out):
                 ss_accum[t].append(spread_skill(ens_np[b, :, t], tgt_np[b, t]))
+        # Show running mean spread-skill across lead times in the bar
+        _running = np.nanmean([np.mean(v) for v in ss_accum if v])
+        batch_bar.set_postfix(mean_SS=f"{_running:.3f}",
+                              seqs=sum(len(v) for v in ss_accum) // max(T_out, 1))
         if i + 1 >= args.max_batches:
             break
+    batch_bar.close()
 
     ss = np.array([np.nanmean(v) if v else np.nan for v in ss_accum])
     n_seq = np.array([len(v) for v in ss_accum])
