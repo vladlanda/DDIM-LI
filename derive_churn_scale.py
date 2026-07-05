@@ -122,9 +122,14 @@ def main():
     p.add_argument("--num_workers", type=int,   default=4)
     p.add_argument("--max_batches", type=int,   default=40,
                    help="Cap validation batches for a fast, stable estimate.")
-    p.add_argument("--val_subsample", type=int, default=8,
-                   help="Take every Nth validation sequence for speed "
-                        "(sampling only — does not change the split boundary).")
+    p.add_argument("--target_n", type=int, default=100,
+                   help="Number of validation sequences to sample for the "
+                        "estimate (evenly strided across the val set). "
+                        "100 gives SE(spread-skill)~0.015 — enough to fit the "
+                        "churn profile. Sampling only; never changes the "
+                        "train/val boundary.")
+    p.add_argument("--val_subsample", type=int, default=None,
+                   help="(Advanced) explicit stride instead of --target_n.")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
@@ -155,12 +160,26 @@ def main():
 
     val_ds = build_val_split(cfg, ckpt_args, channels, stats, device)
 
-    # Optional subsample for speed (sampling only — split boundary unchanged)
-    if args.val_subsample > 1:
+    # Subsample for speed (sampling only — split boundary unchanged).
+    # Compute an even stride so we keep ~target_n sequences total, spread
+    # uniformly across the whole validation period (not just the start).
+    total_val = int(val_ds.cumlen[-1])
+    if args.val_subsample is not None:
+        stride = max(1, args.val_subsample)
+    else:
+        stride = max(1, total_val // max(args.target_n, 1))
+    if stride > 1:
         for sub in val_ds.datasets:
-            sub.valid_sequences = sub.valid_sequences[::args.val_subsample]
+            sub.valid_sequences = sub.valid_sequences[::stride]
         val_ds.lengths = [len(s.valid_sequences) for s in val_ds.datasets]
         val_ds.cumlen  = np.cumsum([0] + val_ds.lengths)
+    kept = int(val_ds.cumlen[-1])
+    logger.info(f"Subsampled validation: {total_val} -> {kept} sequences "
+                f"(stride={stride}, target_n={args.target_n})")
+    # Cap batches to exactly cover the kept sequences
+    import math
+    args.max_batches = min(args.max_batches,
+                           math.ceil(kept / max(batch_size, 1)))
 
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                             num_workers=args.num_workers, pin_memory=True)
@@ -186,21 +205,46 @@ def main():
             break
 
     ss = np.array([np.nanmean(v) if v else np.nan for v in ss_accum])
+    n_seq = np.array([len(v) for v in ss_accum])
     t_frac  = np.arange(T_out) / max(T_out - 1, 1)
     deficit = 1.0 / ss
     mask = np.isfinite(deficit)
-    scale = float(np.sum((deficit[mask] - 1.0) * t_frac[mask]) /
-                  max(np.sum(t_frac[mask] ** 2), 1e-9))
+
+    def fit_scale(defic):
+        return float(np.sum((defic[mask] - 1.0) * t_frac[mask]) /
+                     max(np.sum(t_frac[mask] ** 2), 1e-9))
+
+    scale = fit_scale(deficit)
+
+    # Bootstrap CI: resample sequences per lead time, refit, to gauge whether
+    # target_n was large enough. Wide CI => increase --target_n.
+    rng = np.random.default_rng(0)
+    boot = []
+    for _ in range(500):
+        ss_b = []
+        for t in range(T_out):
+            v = ss_accum[t]
+            if not v:
+                ss_b.append(np.nan); continue
+            samp = rng.choice(v, size=len(v), replace=True)
+            ss_b.append(np.mean(samp))
+        boot.append(fit_scale(1.0 / np.array(ss_b)))
+    boot = np.array(boot)
+    lo, hi = np.percentile(boot, [2.5, 97.5])
 
     print("\n" + "=" * 60)
     print("VALIDATION spread-skill -> derived churn scaling")
     print("=" * 60)
-    print(f"{'Lead':>6}  {'spread_skill':>12}  {'1/SS':>8}")
-    print("-" * 34)
+    print(f"{'Lead':>6}  {'spread_skill':>12}  {'1/SS':>8}  {'n_seq':>7}")
+    print("-" * 44)
     for t in range(T_out):
-        print(f"  +{(t+1)*dt_min:3d}m  {ss[t]:>12.3f}  {deficit[t]:>8.3f}")
-    print("-" * 34)
+        print(f"  +{(t+1)*dt_min:3d}m  {ss[t]:>12.3f}  {deficit[t]:>8.3f}  {n_seq[t]:>7d}")
+    print("-" * 44)
     print(f"\n  Derived churn_lead_scale = {scale:.3f}")
+    print(f"  95% bootstrap CI: [{lo:.3f}, {hi:.3f}]")
+    if hi - lo > 0.5:
+        print(f"  ** CI is wide — consider increasing --target_n for a "
+              f"more stable estimate. **")
     print(f"  (from validation spread-skill deficit; test set untouched)\n")
     print(f"  Apply once to the test set:")
     print(f"    python evaluate.py --config configs/evaluate.yaml "
