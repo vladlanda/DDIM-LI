@@ -8,7 +8,7 @@
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-checkpoint:   outputs/nonelbo_v6_256_T36_LIctx/best.pt
+checkpoint:   outputs/nature_v6_256_T36_LIctx/best.pt
 
 test_roots:
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_1
@@ -16,7 +16,7 @@ test_roots:
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_3
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_4
 
-output_dir:   outputs/nonelbo_v6_256_T36_LIctx/eval
+output_dir:   outputs/nature_v6_256_T36_LIctx/eval
 
 # ----------------------------------------------------------
 # Ensemble sampling
