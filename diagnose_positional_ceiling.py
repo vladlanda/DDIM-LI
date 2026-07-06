@@ -168,9 +168,9 @@ def main():
     print("\n" + "=" * 78)
     print("POSITIONAL CEILING — PR-AUC under neighbourhood relaxation")
     print("=" * 78)
-    hdr = f"{'Lead':>6}  {'exact':>7}"
+    hdr = f"{'Lead':>6}  {'exact':>7}  {'base_rate':>9}"
     for r in args.pool_radii:
-        hdr += f"  {'pool'+str((2*r+1)*4)+'km':>10}"
+        hdr += f"  {'near'+str((2*r+1)*4)+'km':>10}"
     hdr += f"  {'best_shift':>10}"
     print(hdr)
     print("-" * len(hdr))
@@ -183,16 +183,23 @@ def main():
         # exact: concat all sequences
         exact = pr_auc(np.stack(probs), np.stack(lbls))
 
-        row = f"  +{lead:3d}m  {exact:>7.3f}"
+        base_rate = float(np.stack(lbls).mean())
+        row = f"  +{lead:3d}m  {exact:>7.3f}  {base_rate:>9.4f}"
 
-        # pooled at each radius
+        # Displacement-tolerant PR-AUC (FSS-style): a prediction pixel is a
+        # hit if an observed event lies WITHIN radius r. Dilate ONLY the
+        # observation (hit-allowed mask); score the RAW prob against it.
+        # This does NOT pool the prediction, so it doesn't double-inflate,
+        # and it answers the positional question: "did high prob land near
+        # a real event?" Note base rate rises with r, so compare the SHAPE
+        # of recovery, and always read alongside best_shift.
         for r in args.pool_radii:
             size = 2 * r + 1
-            pooled_p, pooled_l = [], []
+            relaxed_p, relaxed_l = [], []
             for prob, lbl in zip(probs, lbls):
-                pooled_p.append(maximum_filter(prob, size=size, mode="constant"))
-                pooled_l.append(maximum_filter(lbl,  size=size, mode="constant"))
-            row += f"  {pr_auc(np.stack(pooled_p), np.stack(pooled_l)):>10.3f}"
+                relaxed_p.append(prob)                                  # raw prob
+                relaxed_l.append(maximum_filter(lbl, size=size, mode="constant"))
+            row += f"  {pr_auc(np.stack(relaxed_p), np.stack(relaxed_l)):>10.3f}"
 
         # best-shift: per-sequence optimal shift, then aggregate
         shifted_p, kept_l = [], []
