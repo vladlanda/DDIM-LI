@@ -133,6 +133,7 @@ class UNet(nn.Module):
         self,
         in_channels:      int,
         out_channels:     int,
+        aux_cool:         bool = False,
         base_channels:    int   = 128,
         channel_mults:    tuple = (1, 2, 3, 4),
         num_res_blocks:   int   = 2,
@@ -241,6 +242,20 @@ class UNet(nn.Module):
         self.out_norm = nn.GroupNorm(num_groups, final_ch)
         self.out_conv = nn.Conv2d(final_ch, out_channels, 1)
 
+        # Auxiliary cooling-rate head (nature branch novelty).
+        # Predicts the cumulative cloud-top cooling field from the SHARED
+        # decoder representation, forcing that representation to encode
+        # convective development (the physical precursor of lightning).
+        # Single-channel output per lead step.
+        self.aux_cool = aux_cool
+        if aux_cool:
+            self.cool_norm = nn.GroupNorm(num_groups, final_ch)
+            self.cool_head = nn.Sequential(
+                nn.Conv2d(final_ch, final_ch // 2, 3, padding=1),
+                nn.SiLU(),
+                nn.Conv2d(final_ch // 2, 1, 1),
+            )
+
     def forward(
         self,
         x:         torch.Tensor,
@@ -282,7 +297,11 @@ class UNet(nn.Module):
             elif plan["type"] == "up":
                 h = block(h)
 
-        return self.out_conv(F.silu(self.out_norm(h)))
+        main = self.out_conv(F.silu(self.out_norm(h)))
+        if self.aux_cool:
+            cool = self.cool_head(F.silu(self.cool_norm(h)))
+            return main, cool
+        return main
 
 
 # ===================================================================
@@ -305,6 +324,7 @@ class EDMPrecond(nn.Module):
         context:   torch.Tensor,
         ch_mask:   torch.Tensor,
         lead_time: torch.Tensor,
+        return_aux: bool = False,
     ) -> torch.Tensor:
         sd = self.sigma_data
         c_skip  = sd**2 / (sigma**2 + sd**2)
@@ -319,8 +339,13 @@ class EDMPrecond(nn.Module):
         mask_spatial = ch_mask[:, :, None, None].expand_as(x_noisy)
         net_input    = torch.cat([c_in * x_noisy, context, mask_spatial], dim=1)
 
-        raw = self.unet(net_input, c_noise, lead_time, ch_mask)
-        return c_skip * x_noisy + c_out * raw
+        out = self.unet(net_input, c_noise, lead_time, ch_mask)
+        if isinstance(out, tuple):
+            raw, cool = out
+            denoised = c_skip * x_noisy + c_out * raw
+            # Aux cooling prediction is a DIRECT field (not preconditioned).
+            return (denoised, cool) if return_aux else denoised
+        return c_skip * x_noisy + c_out * out
 
 
 # ===================================================================
@@ -345,11 +370,13 @@ class MultiStepDenoiser(nn.Module):
         context:  torch.Tensor,   # (B, T_in, C_ctx, H, W)  C_ctx = C_data or C_data+1
         ch_mask:  torch.Tensor,   # (B, C_data)
         lead_idx: torch.Tensor,
+        return_aux: bool = False,
     ) -> torch.Tensor:
         B, T_in, C_ctx, H, W = context.shape
         ctx_flat  = context.reshape(B, T_in * C_ctx, H, W)
         lead_time = (lead_idx.float() + 1) * self.dt_min
-        return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
+        return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time,
+                            return_aux=return_aux)
 
     @torch.no_grad()
     def sample_all_steps(
@@ -649,6 +676,8 @@ def training_loss(
     lead_time_weights:  Optional[List[float]] = None,
     # Channel config
     channels:           Optional[List[str]] = None,
+    # Auxiliary cooling-rate task (nature branch)
+    aux_cool_weight:    float = 0.0,
 ) -> torch.Tensor:
     """
     Composite training loss:
@@ -703,8 +732,13 @@ def training_loss(
     else:
         ctx_used = context
 
-    # Forward pass
-    pred = denoiser(x_noisy, sigma, ctx_used, ch_mask, lead_idx)
+    # Forward pass (request aux cooling prediction if the task is active)
+    use_aux = aux_cool_weight > 0.0
+    out = denoiser(x_noisy, sigma, ctx_used, ch_mask, lead_idx, return_aux=use_aux)
+    if use_aux and isinstance(out, tuple):
+        pred, cool_pred = out
+    else:
+        pred, cool_pred = out, None
 
     # ── L_denoise: EDM-weighted MSE with dynamic LI channel weight ────
     lw = schedule.edm_loss_weight(sigma)[:, None, None, None]
@@ -735,7 +769,22 @@ def training_loss(
     # ── L_spectral: FFT on cloud channels only ────────────────────────
     L_spec = spectral_loss(pred, y, ch_mask, li_idx=li_idx)
 
+    # ── L_cool: auxiliary convective-tendency task (nature branch) ────
+    # Force the shared representation to encode cloud-top cooling — the
+    # physical precursor of lightning. Target = cumulative cooling from the
+    # last context frame to the target frame at this lead step:
+    #     cooling = -(IR_target - IR_last_ctx)   (positive = cooled/deepened)
+    # Predicting this makes the latent state track convective development,
+    # improving lightning EXISTENCE prediction (the diagnosed bottleneck).
+    L_cool = torch.tensor(0.0, device=device)
+    if cool_pred is not None and channels is not None and "ir" in channels:
+        ir_idx = channels.index("ir")
+        ir_target_abs = y[:, ir_idx] + last_ctx[:, ir_idx]   # absolute IR at lead t
+        cooling_tgt   = -(ir_target_abs - last_ctx[:, ir_idx])  # (B, H, W)
+        L_cool = F.mse_loss(cool_pred[:, 0], cooling_tgt)
+
     return (L_denoise
             + asym_weight    * L_asym
             + nbr_weight     * L_nbr
-            + spectral_weight * L_spec)
+            + spectral_weight * L_spec
+            + aux_cool_weight * L_cool)

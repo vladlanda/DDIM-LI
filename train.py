@@ -135,6 +135,7 @@ def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDe
     unet   = UNet(
         in_channels      = in_ch,
         out_channels     = C,
+        aux_cool         = getattr(args, "aux_cool_weight", 0.0) > 0.0,
         base_channels    = args.base_channels,
         channel_mults    = tuple(args.channel_mults),
         num_res_blocks   = args.num_res_blocks,
@@ -457,6 +458,7 @@ def train(args):
                     spectral_weight      = args.spectral_weight,
                     lead_time_weights    = args.lead_time_weights,
                     channels             = channels,
+                    aux_cool_weight      = getattr(args, "aux_cool_weight", 0.0),
                 )
 
             scaler.scale(loss).backward()
