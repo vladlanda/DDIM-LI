@@ -440,8 +440,9 @@ def train(args):
         for step, batch in enumerate(step_bar):
             opt.zero_grad(set_to_none=True)
 
+            _aux_w = getattr(args, "aux_cool_weight", 0.0)
             with autocast('cuda', enabled=args.amp):
-                loss = training_loss(
+                _out = training_loss(
                     denoiser             = model,
                     schedule             = schedule,
                     batch                = batch,
@@ -458,8 +459,13 @@ def train(args):
                     spectral_weight      = args.spectral_weight,
                     lead_time_weights    = args.lead_time_weights,
                     channels             = channels,
-                    aux_cool_weight      = getattr(args, "aux_cool_weight", 0.0),
+                    aux_cool_weight      = _aux_w,
+                    return_terms         = (_aux_w > 0.0),
                 )
+                if _aux_w > 0.0:
+                    loss, loss_terms = _out
+                else:
+                    loss, loss_terms = _out, None
 
             scaler.scale(loss).backward()
             # DDP automatically averages gradients across GPUs during backward
@@ -477,9 +483,15 @@ def train(args):
             total_loss += loss.item()
 
             if main:
-                step_bar.set_postfix(loss=f"{loss.item():.4f}",
-                                     lr   = f"{sched.get_last_lr()[0]:.2e}",
-                                      refresh=False)
+                _pf = {"loss": f"{loss.item():.4f}",
+                       "lr": f"{sched.get_last_lr()[0]:.2e}"}
+                if loss_terms is not None:
+                    _pf["L_cool"]  = f"{loss_terms['L_cool']:.3f}"
+                    _pf["L_den"]   = f"{loss_terms['L_denoise']:.3f}"
+                step_bar.set_postfix(**_pf, refresh=False)
+                if HAS_WANDB and args.wandb_project and (step % 50 == 0) and loss_terms is not None:
+                    import wandb as _wandb
+                    _wandb.log({f"train/{k}": v for k, v in loss_terms.items()})
 
         sched.step()   # called after all opt.step()s in this epoch ✓
         avg_loss = total_loss / len(train_loader)

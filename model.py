@@ -678,6 +678,7 @@ def training_loss(
     channels:           Optional[List[str]] = None,
     # Auxiliary cooling-rate task (nature branch)
     aux_cool_weight:    float = 0.0,
+    return_terms:       bool = False,
 ) -> torch.Tensor:
     """
     Composite training loss:
@@ -783,8 +784,19 @@ def training_loss(
         cooling_tgt   = -(ir_target_abs - last_ctx[:, ir_idx])  # (B, H, W)
         L_cool = F.mse_loss(cool_pred[:, 0], cooling_tgt)
 
-    return (L_denoise
-            + asym_weight    * L_asym
-            + nbr_weight     * L_nbr
-            + spectral_weight * L_spec
-            + aux_cool_weight * L_cool)
+    total = (L_denoise
+             + asym_weight     * L_asym
+             + nbr_weight      * L_nbr
+             + spectral_weight * L_spec
+             + aux_cool_weight * L_cool)
+
+    if return_terms:
+        return total, {
+            "L_denoise": float(L_denoise.detach()),
+            "L_asym":    float(L_asym.detach()) if torch.is_tensor(L_asym) else float(L_asym),
+            "L_nbr":     float(L_nbr.detach())  if torch.is_tensor(L_nbr)  else float(L_nbr),
+            "L_spec":    float(L_spec.detach()) if torch.is_tensor(L_spec) else float(L_spec),
+            "L_cool":    float(L_cool.detach()),
+            "L_cool_weighted": float((aux_cool_weight * L_cool).detach()),
+        }
+    return total
