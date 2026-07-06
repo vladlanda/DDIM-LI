@@ -784,11 +784,28 @@ def training_loss(
         cooling_tgt   = -(ir_target_abs - last_ctx[:, ir_idx])  # (B, H, W)
         L_cool = F.mse_loss(cool_pred[:, 0], cooling_tgt)
 
+    # Scale-normalized auxiliary balancing.
+    # L_cool (IR-difference MSE) is intrinsically ~1e5x smaller than L_denoise
+    # (which carries the EDM sigma-weight and dynamic LI weight). A raw
+    # aux_cool_weight would therefore need an absurd magnitude to matter.
+    # Instead we rescale L_cool by the DETACHED ratio L_denoise/L_cool so that
+    # aux_cool_weight is a true FRACTION of the denoise-loss magnitude:
+    #     aux_cool_weight=0.3  ->  cooling contributes 30% as much as denoising.
+    # Detaching the scale keeps the GRADIENT DIRECTION of L_cool intact (only
+    # its magnitude is matched), so this balances tasks without distorting the
+    # auxiliary objective. Standard practice for multi-task losses with very
+    # different natural scales (cf. GradNorm / uncertainty weighting).
+    if aux_cool_weight > 0.0 and torch.is_tensor(L_cool) and float(L_cool.detach()) > 0:
+        scale = (L_denoise.detach() / (L_cool.detach() + 1e-8)).clamp(max=1e6)
+        L_cool_term = aux_cool_weight * scale * L_cool
+    else:
+        L_cool_term = aux_cool_weight * L_cool
+
     total = (L_denoise
              + asym_weight     * L_asym
              + nbr_weight      * L_nbr
              + spectral_weight * L_spec
-             + aux_cool_weight * L_cool)
+             + L_cool_term)
 
     if return_terms:
         return total, {
@@ -797,6 +814,6 @@ def training_loss(
             "L_nbr":     float(L_nbr.detach())  if torch.is_tensor(L_nbr)  else float(L_nbr),
             "L_spec":    float(L_spec.detach()) if torch.is_tensor(L_spec) else float(L_spec),
             "L_cool":    float(L_cool.detach()),
-            "L_cool_weighted": float((aux_cool_weight * L_cool).detach()),
+            "L_cool_weighted": float(L_cool_term.detach()) if torch.is_tensor(L_cool_term) else float(L_cool_term),
         }
     return total
