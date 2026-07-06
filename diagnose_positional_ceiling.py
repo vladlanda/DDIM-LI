@@ -112,7 +112,7 @@ def main():
 
     cfg = load_yaml(args.config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt_path = args.checkpoint or f"{cfg['output_dir']}/best.pt"
+    ckpt_path = args.checkpoint or f"{cfg['checkpoint']}"
     ckpt = torch.load(ckpt_path, map_location=device)
     ckpt_args = ckpt["args"]; channels = ckpt["channels"]; stats = ckpt["stats"]
     T_out = ckpt_args["T_out"]; dt_min = ckpt_args["dt_min"]
