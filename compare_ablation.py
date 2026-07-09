@@ -36,20 +36,30 @@ def pr_auc(prob, lbl):
 
 
 def partial_pr_auc(prob, lbl, pod_min):
-    """PR-AUC restricted to the high-recall (high-POD) region, normalised
-    to [0,1] over that region. This is the 'existence regime'."""
-    if lbl.sum() == 0:
+    """Mean precision over the high-recall (POD >= pod_min) region.
+
+    Previous version integrated with auc() over the restricted recall span,
+    which returns NaN whenever the curve has <2 distinct recall points above
+    pod_min OR the span has zero width. With a coarse ensemble probability
+    (only M+1 distinct values for M members) that happens often.
+
+    We instead interpolate precision onto a fixed recall grid in
+    [pod_min, 1] and average. This is well-defined for any monotone PR curve
+    and comparable across models.
+    """
+    if lbl.sum() == 0 or lbl.sum() == lbl.size:
         return np.nan
     prec, rec, _ = precision_recall_curve(lbl, prob)
-    # precision_recall_curve returns recall DECREASING; sort ascending
-    order = np.argsort(rec)
+    order = np.argsort(rec)                    # ascending recall
     rec, prec = rec[order], prec[order]
-    m = rec >= pod_min
-    if m.sum() < 2:
-        return np.nan
-    a = auc(rec[m], prec[m])
-    width = rec[m].max() - rec[m].min()
-    return float(a / width) if width > 0 else np.nan
+    if rec.max() < pod_min:
+        # The model never attains this recall at ANY threshold.
+        # Precision there is undefined; report 0.0 (no skill in this regime)
+        # rather than NaN, so the comparison remains interpretable.
+        return 0.0
+    grid = np.linspace(pod_min, min(1.0, rec.max()), 50)
+    p_interp = np.interp(grid, rec, prec)
+    return float(np.mean(p_interp))
 
 
 def bootstrap_delta(pb, lb, pt, lt, n_boot=200, seed=0):
@@ -114,18 +124,26 @@ def main():
 
     # Existence regime: partial PR-AUC at high recall
     print(f"\n{'='*84}")
-    print(f"EXISTENCE REGIME — partial PR-AUC restricted to POD >= {args.pod_min}")
+    print(f"EXISTENCE REGIME — mean precision at POD >= {args.pod_min}")
     print("(the mechanism predicts the gain concentrates HERE)")
     print("=" * 84)
-    print(f"{'Lead':>6}  {'base':>7}  {'aux':>7}  {'delta':>8}")
-    print("-" * 40)
+    print(f"{'Lead':>6}  {'base':>7}  {'aux':>7}  {'delta':>8}  "
+          f"{'max_rec_b':>9}  {'max_rec_a':>9}")
+    print("-" * 62)
     for t in steps:
         kb, lb_k = f"pr_prob_{t}", f"pr_label_{t}"
         if kb not in B or kb not in T:
             continue
-        a = partial_pr_auc(B[kb], B[lb_k].astype(int), args.pod_min)
-        b = partial_pr_auc(T[kb], T[lb_k].astype(int), args.pod_min)
-        print(f"  +{(t+1)*args.dt_min:3d}m  {a:>7.3f}  {b:>7.3f}  {b-a:>+8.3f}")
+        lb, lt = B[lb_k].astype(int), T[lb_k].astype(int)
+        a = partial_pr_auc(B[kb], lb, args.pod_min)
+        b = partial_pr_auc(T[kb], lt, args.pod_min)
+        # Max attainable recall tells us if a model can even reach this regime
+        _, rb, _ = precision_recall_curve(lb, B[kb])
+        _, rt, _ = precision_recall_curve(lt, T[kb])
+        print(f"  +{(t+1)*args.dt_min:3d}m  {a:>7.3f}  {b:>7.3f}  {b-a:>+8.3f}  "
+              f"{rb.max():>9.3f}  {rt.max():>9.3f}")
+    print("\n  max_rec = highest recall attainable at any threshold. If a model")
+    print("  cannot reach pod_min, its precision there is reported as 0.000.")
 
     # ── Interpretation guidance (no automated verdict) ─────────────────
     #
