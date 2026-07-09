@@ -778,19 +778,62 @@ def forecast(
 # Quick visualisation (matplotlib)
 # ===================================================================
 
-def _make_rgb(frames: np.ndarray, channels: List[str]) -> np.ndarray:
+def _display_ranges(ref_frames: np.ndarray, channels: List[str],
+                    pct: float = 99.0) -> dict:
+    """
+    Compute FIXED per-channel display ranges from reference (observed) frames.
+
+    These ranges are then applied identically to context, prediction and
+    ground-truth panels, so the three rows are visually comparable.
+
+    Previously _make_rgb/_make_li min-max stretched EVERY panel independently,
+    which (a) gave each row a different colour scale, (b) lifted the ensemble
+    mean's low-amplitude LI floor to mid-colormap (LI panels rendered solid
+    red), and (c) produced colour casts in the RGB composite because r/g/b
+    were stretched by different factors.
+
+    ref_frames: (..., C, H, W) denormalised observations (GT and/or context).
+    Returns {channel: (lo, hi)}.
+    """
+    ranges = {}
+    for ci, ch in enumerate(channels):
+        arr = ref_frames[..., ci, :, :].astype(np.float32)
+        if ch == "li":
+            # LI is sparse and non-negative: anchor at 0, cap at a high
+            # percentile of the NON-ZERO values so a few extreme flashes
+            # don't crush the scale.
+            nz = arr[arr > 0]
+            hi = float(np.percentile(nz, pct)) if nz.size else 1.0
+            ranges[ch] = (0.0, max(hi, 1e-6))
+        else:
+            lo = float(np.percentile(arr, 100.0 - pct))
+            hi = float(np.percentile(arr, pct))
+            if hi - lo < 1e-8:
+                hi = lo + 1e-6
+            ranges[ch] = (lo, hi)
+    return ranges
+
+
+def _make_rgb(frames: np.ndarray, channels: List[str],
+              ranges: Optional[dict] = None) -> np.ndarray:
     """
     Compose a false-colour RGB image from ir/ch0/ch1 channels.
-    frames: (C, H, W)  denormalised
+    frames: (C, H, W) denormalised.
+    ranges: {channel: (lo, hi)} fixed display range shared across all rows.
+            If None, falls back to per-image min-max (legacy; not comparable).
     Returns (H, W, 3) uint8.
     """
     def _pull(ch):
         if ch in channels:
-            arr = frames[channels.index(ch)]
+            arr = frames[channels.index(ch)].astype(np.float32)
         else:
-            arr = np.zeros(frames.shape[-2:], dtype=np.float32)
-        lo, hi = arr.min(), arr.max()
-        return ((arr - lo) / (hi - lo + 1e-8) * 255).astype(np.uint8)
+            return np.zeros(frames.shape[-2:], dtype=np.uint8)
+        if ranges is not None and ch in ranges:
+            lo, hi = ranges[ch]
+        else:
+            lo, hi = float(arr.min()), float(arr.max())
+        out = (arr - lo) / (hi - lo + 1e-8)
+        return (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
 
     r = _pull("ir")
     g = _pull("ch0")
@@ -798,16 +841,23 @@ def _make_rgb(frames: np.ndarray, channels: List[str]) -> np.ndarray:
     return np.stack([r, g, b], axis=-1)   # (H, W, 3)
 
 
-def _make_li(frames: np.ndarray, channels: List[str]) -> np.ndarray:
+def _make_li(frames: np.ndarray, channels: List[str],
+             ranges: Optional[dict] = None) -> np.ndarray:
     """
-    Return the LI channel as a (H, W) float array, normalised 0-1.
+    Return the LI channel as (H, W) in [0, 1] using a FIXED range so that
+    context / prediction / ground-truth panels share one colour scale.
+    Zero stays exactly zero (black), which is the physically meaningful
+    background for LI.
     """
     if "li" in channels:
-        arr = frames[channels.index("li")]
+        arr = frames[channels.index("li")].astype(np.float32)
     else:
-        arr = np.zeros(frames.shape[-2:], dtype=np.float32)
-    lo, hi = arr.min(), arr.max()
-    return (arr - lo) / (hi - lo + 1e-8)
+        return np.zeros(frames.shape[-2:], dtype=np.float32)
+    if ranges is not None and "li" in ranges:
+        lo, hi = ranges["li"]
+    else:
+        lo, hi = float(arr.min()), float(arr.max())
+    return np.clip((arr - lo) / (hi - lo + 1e-8), 0.0, 1.0)
 
 
 def plot_forecast(
@@ -870,11 +920,19 @@ def plot_forecast(
             ax.axis("off")
             ax.set_facecolor("white")
 
+    # Fixed display ranges derived from OBSERVATIONS (ground truth if present,
+    # else the context). Applied identically to every row so that context,
+    # prediction and GT are visually comparable. Without this, each panel was
+    # min-max stretched independently: the ensemble-mean LI floor rendered as
+    # solid red, and the RGB channels acquired colour casts.
+    _ref = gt_np if has_gt else context_np
+    disp_ranges = _display_ranges(_ref, channels)
+
     # Pre-compute last context frame composites (shared across all columns)
     ctx_last    = context_np[-1]           # (C_ctx, H, W)
     _ctx_chs    = ctx_channels if ctx_channels is not None else channels
-    ctx_rgb     = _make_rgb(ctx_last, _ctx_chs)
-    ctx_li      = _make_li(ctx_last,  _ctx_chs)
+    ctx_rgb     = _make_rgb(ctx_last, _ctx_chs, disp_ranges)
+    ctx_li      = _make_li(ctx_last,  _ctx_chs, disp_ranges)
 
     font_title = max(4, min(7, int(120 / n_steps)))   # shrinks gracefully
 
@@ -894,11 +952,14 @@ def plot_forecast(
             axes[0, base + 1].set_title("LI",         fontsize=font_title, color="black", pad=2)
 
         # ── Row 1: Prediction ──
-        pred_rgb = _make_rgb(ens_mean, channels)
-        pred_li  = _make_li(ens_mean,  channels)
+        pred_rgb = _make_rgb(ens_mean, channels, disp_ranges)
+        pred_li  = _make_li(ens_mean,  channels, disp_ranges)
         if "li" in channels:
-            s = ens_std[channels.index("li")]
-            spread_li = (s - s.min()) / (s.max() - s.min() + 1e-8)
+            # Spread on the SAME absolute LI scale (not per-panel min-max),
+            # so spread magnitude is comparable across lead times.
+            s   = ens_std[channels.index("li")]
+            _hi = disp_ranges["li"][1]
+            spread_li = np.clip(s / (_hi + 1e-8), 0.0, 1.0)
         else:
             spread_li = np.zeros((H, W), dtype=np.float32)
 
@@ -910,8 +971,9 @@ def plot_forecast(
         # ── Row 2: Ground truth ──
         if has_gt:
             gt_frame = gt_np[step]
-            axes[2, base    ].imshow(_make_rgb(gt_frame, channels))
-            axes[2, base + 1].imshow(_make_li(gt_frame,  channels), cmap="hot", vmin=0, vmax=1)
+            axes[2, base    ].imshow(_make_rgb(gt_frame, channels, disp_ranges))
+            axes[2, base + 1].imshow(_make_li(gt_frame,  channels, disp_ranges),
+                                     cmap="hot", vmin=0, vmax=1)
             axes[2, base + 2].set_visible(False)
 
     # Row labels on the far left of each row
