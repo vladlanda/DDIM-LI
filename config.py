@@ -101,11 +101,6 @@ def add_arguments(parser: argparse.ArgumentParser):
                         help="Kernel sizes for neighbourhood avg_pool (pixels). "
                              "k=5 ≈ 20km, k=11 ≈ 44km at 4km/pixel.")
     # -- Spectral loss (cloud channels only) --
-    parser.add_argument("--aux_cool_weight", type=float, default=0.0,
-                        help="Weight for auxiliary cloud-top cooling-rate "
-                             "prediction task. Forces shared representation "
-                             "to encode convective tendency (lightning "
-                             "precursor). 0=disabled. [nature branch]")
     parser.add_argument("--spectral_weight", type=float, default=0.1,
                         help="FFT magnitude loss weight. Applied to IR/cloud channels only.")
     parser.add_argument("--lead_time_weights", nargs="+", type=float, default=None,

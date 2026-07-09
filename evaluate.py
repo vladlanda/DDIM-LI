@@ -1522,22 +1522,9 @@ def run_test_evaluation(args):
     C_ctx  = C_ctx_sel + 1 if (binary_li_ctx and _li_in_ctx) else C_ctx_sel
     in_ch  = C + T_in * C_ctx + C   # noisy + context + mask
 
-    # Rebuild the aux cooling head if the checkpoint was trained with it,
-    # otherwise its weights have nowhere to load. Detect from saved args,
-    # falling back to inspecting the state_dict for aux keys (robust to
-    # checkpoints saved before aux_cool_weight existed).
-    state    = ckpt.get("ema") or ckpt["model"]
-    _aux_in_args  = float(ckpt_args.get("aux_cool_weight", 0.0)) > 0.0
-    _aux_in_state = any(k.startswith("precond.unet.cool_head") or
-                        k.startswith("precond.unet.cool_norm") for k in state)
-    _aux_cool = _aux_in_args or _aux_in_state
-    if _aux_cool:
-        logger.info("  aux cooling head detected -> building UNet with aux_cool=True")
-
     unet = UNet(
         in_channels      = in_ch,
         out_channels     = C,
-        aux_cool         = _aux_cool,
         base_channels    = ckpt_args["base_channels"],
         channel_mults    = tuple(ckpt_args["channel_mults"]),
         num_res_blocks   = ckpt_args["num_res_blocks"],
@@ -1549,6 +1536,7 @@ def run_test_evaluation(args):
     precond  = EDMPrecond(unet, sigma_data=ckpt_args.get("sigma_data", 0.5))
     model    = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)
     # Prefer EMA weights for evaluation
+    state    = ckpt.get("ema") or ckpt["model"]
     model.load_state_dict(state)
     model.to(device).eval()
     logger.info(f"Checkpoint loaded: {args.checkpoint}")
