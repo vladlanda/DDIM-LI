@@ -165,8 +165,30 @@ def stem_to_prefix(stem: str) -> str:
 # -------------------------------------------------------------------
 # Index builder  (with disk cache to avoid slow repeat filesystem scans)
 # -------------------------------------------------------------------
+# A solid-black JPEG compresses to ~1.1-1.7 kB; real IR texture is ~40 kB.
+# An all-black IR frame is PHYSICALLY IMPOSSIBLE (Earth always emits in the IR),
+# so such a file is corrupt/missing data. An all-black LI frame is LEGITIMATE
+# (it means no flashes), so LI is never size-filtered.
+MIN_IR_BYTES = 3000
+
+
+def _is_usable(path: Path, ch: str, min_bytes: int = MIN_IR_BYTES) -> bool:
+    """
+    A channel file counts as PRESENT only if it exists and is not degenerate.
+    Path.exists() is already a stat(), so reading st_size costs nothing extra.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if ch == "li":
+        return True                      # all-zero LI = no lightning = valid
+    return st.st_size >= min_bytes
+
+
 def build_index(root: str,
-                cache_path: Optional[str] = None) -> Dict[datetime, Dict[str, Path]]:
+                cache_path: Optional[str] = None,
+                min_ir_bytes: int = MIN_IR_BYTES) -> Dict[datetime, Dict[str, Path]]:
     """
     Returns: { start_dt: { channel: Path, ... }, ... }
     Only timesteps that have BOTH ir AND li are included.
@@ -197,6 +219,8 @@ def build_index(root: str,
 
     ir_files = sorted(Path(root).glob("*_ir.jpg"))   # flat glob, IR only
     index: Dict[datetime, Dict[str, Path]] = {}
+    _n_present: Dict[str, int] = {}
+    _n_black:   Dict[str, int] = {}
 
     for ir_fp in tqdm(ir_files, desc=f"  Scanning {Path(root).name}",
                       unit="file", dynamic_ncols=True, leave=True):
@@ -211,8 +235,13 @@ def build_index(root: str,
         chs: Dict[str, Path] = {}
         for ch in ALL_CHANNELS:
             candidate = Path(str(prefix) + f"_{ch}.jpg")
-            if candidate.exists():
+            # exists() is not enough: a present-but-all-black IR file would be
+            # marked valid (ch_mask=1) and fed to the model as a constant plane.
+            if _is_usable(candidate, ch, min_ir_bytes):
                 chs[ch] = candidate
+                _n_present[ch] = _n_present.get(ch, 0) + 1
+            elif candidate.exists():
+                _n_black[ch] = _n_black.get(ch, 0) + 1
 
         # Only include timesteps that have both required channels
         if all(c in chs for c in REQUIRED_CHANNELS):
@@ -229,6 +258,12 @@ def build_index(root: str,
     #     json.dump(cache_data, f)
     # logger.info(f"  Index cached → {cache_path}  ({len(index)} valid timesteps)")
 
+    if _n_black:
+        logger.warning(
+            f"  Rejected degenerate (all-black) frames in {Path(root).name}: "
+            + ", ".join(f"{ch}={n}" for ch, n in sorted(_n_black.items()))
+            + "  -> these are now masked absent, not fed as constant planes."
+        )
     logger.info(f"  Index built: {len(index)} valid timesteps")
 
     return index
