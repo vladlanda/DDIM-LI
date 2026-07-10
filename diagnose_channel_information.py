@@ -119,7 +119,12 @@ def main():
     feats = ["ir105(ctrl)", "ch0(ir87)", "ch1(ir97)", "ch2(ir123)",
              "BTD(105-123)", "BTD(105-87)", "BTD(105-97)", "RANDOM(null)"]
     acc = {t: {f: {"x_e": [], "x_p": []} for f in feats} for t in range(args.T_out)}
-    acc_y = {t: {"y_e": [], "y_p": [], "s_e": [], "s_p": []} for t in range(args.T_out)}
+    # store the RAW conditioning variables; strata are built globally at report
+    # time. Per-sequence quantile bins are NOT comparable across sequences and
+    # badly under-condition (leakage floor 0.106 vs 0.028 in validation).
+    acc_y = {t: {"y_e": [], "y_p": [],
+                 "ir_e": [], "ir_p": [], "lh_e": [], "lh_p": []}
+             for t in range(args.T_out)}
 
     rng = np.random.default_rng(0)
 
@@ -155,9 +160,8 @@ def main():
             y_e   = block_reduce(y.astype(float), B, "max").ravel()
             ir_e  = block_reduce(ir0, B, "mean").ravel()
             lih_e = block_reduce(li_hist.astype(float), B, "max").ravel()
-            s_e   = (np.digitize(ir_e, np.quantile(ir_e, np.linspace(0, 1, args.n_ir_bins + 1)[1:-1]))
-                     * 2 + lih_e.astype(int))
-            acc_y[t]["y_e"].append(y_e); acc_y[t]["s_e"].append(s_e)
+            acc_y[t]["y_e"].append(y_e)
+            acc_y[t]["ir_e"].append(ir_e); acc_y[t]["lh_e"].append(lih_e)
             for f in feats:
                 acc[t][f]["x_e"].append(block_reduce(F[f], B, "mean").ravel())
 
@@ -165,7 +169,6 @@ def main():
             act = np.repeat(np.repeat(block_reduce(y.astype(float), B, "max"), B, 0), B, 1)
             Hc, Wc = act.shape
             sel = act.astype(bool)
-            sel[::1, ::1] &= True
             idx = np.zeros_like(sel); idx[::args.pix_stride, ::args.pix_stride] = True
             sel &= idx
             if sel.sum() < 50:
@@ -173,11 +176,9 @@ def main():
             yy   = y[:Hc, :Wc][sel]
             if yy.min() == yy.max():
                 continue
-            irp  = ir0[:Hc, :Wc][sel]
-            lihp = li_hist[:Hc, :Wc][sel]
-            s_p  = (np.digitize(irp, np.quantile(irp, np.linspace(0, 1, args.n_ir_bins + 1)[1:-1]))
-                    * 2 + lihp.astype(int))
-            acc_y[t]["y_p"].append(yy.astype(float)); acc_y[t]["s_p"].append(s_p)
+            acc_y[t]["y_p"].append(yy.astype(float))
+            acc_y[t]["ir_p"].append(ir0[:Hc, :Wc][sel])
+            acc_y[t]["lh_p"].append(li_hist[:Hc, :Wc][sel].astype(float))
             for f in feats:
                 acc[t][f]["x_p"].append(F[f][:Hc, :Wc][sel])
 
@@ -188,29 +189,37 @@ def main():
     print(f"  block = {args.block}px = {args.block*4} km    AUC 0.5 => adds NOTHING beyond conditioning set")
     print("=" * 96)
 
-    for regime, key_x, key_y, key_s, label in [
-        ("EXISTENCE", "x_e", "y_e", "s_e", "does the block electrify at all?"),
-        ("POSITION",  "x_p", "y_p", "s_p", "which pixel, given the block is active?"),
+    def _strata(ir, lh, nb):
+        """Global quantile bins of ir105 (comparable across sequences) x LI history."""
+        q = np.quantile(ir, np.linspace(0, 1, nb + 1)[1:-1])
+        return np.digitize(ir, q) * 2 + lh.astype(int)
+
+    for regime, kx, ky, kir, klh, label in [
+        ("EXISTENCE", "x_e", "y_e", "ir_e", "lh_e", "does the block electrify at all?"),
+        ("POSITION",  "x_p", "y_p", "ir_p", "lh_p", "which pixel, given the block is active?"),
     ]:
         print(f"\n--- {regime}: {label} ---")
+        print("    values are |AUC - 0.5| (informativeness). Direction is irrelevant:")
+        print("    ir105 is ANTI-correlated with lightning (cold top = dark = flashes).")
         hdr = f"{'feature':<15}" + "".join(f"{(t+1)*args.dt_min:>9}m" for t in range(args.T_out))
         print(hdr); print("-" * len(hdr))
         for f in feats:
             row = f"{f:<15}"
             for t in range(args.T_out):
-                if not acc_y[t][key_y]:
+                if not acc_y[t][ky]:
                     row += f"{'--':>10}"; continue
-                x = np.concatenate(acc[t][f][key_x])
-                y = np.concatenate(acc_y[t][key_y])
-                s = np.concatenate(acc_y[t][key_s])
-                a = cond_auc(x, y, s)
-                row += f"{a:>10.3f}" if np.isfinite(a) else f"{'--':>10}"
+                x  = np.concatenate(acc[t][f][kx])
+                y  = np.concatenate(acc_y[t][ky])
+                ir = np.concatenate(acc_y[t][kir])
+                lh = np.concatenate(acc_y[t][klh])
+                a  = cond_auc(x, y, _strata(ir, lh, args.n_ir_bins))
+                row += f"{abs(a-0.5):>10.3f}" if np.isfinite(a) else f"{'--':>10}"
             print(row)
 
     print("\nREAD (in this order):")
-    print("  1. RANDOM(null) must sit at ~0.500, else the estimator is biased.")
-    print("  2. ir105(ctrl) is the LEAKAGE FLOOR, not 0.500. Finite stratification")
-    print("     lets some ir105 through. Judge every channel against THIS number.")
+    print("  1. RANDOM(null) must sit at ~0.000, else the estimator is biased.")
+    print("  2. ir105(ctrl) is the LEAKAGE FLOOR (not 0). Finite stratification lets")
+    print("     some ir105 through. Judge every channel against THIS number.")
     print("  3. A channel at or below the floor is REDUNDANT with ir105 + LI history.")
     print("     Its marginal skill is irrelevant: dropping it costs nothing.")
     print("  4. EXISTENCE vs POSITION: a channel may inform one regime and not the")
