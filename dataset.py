@@ -205,11 +205,22 @@ def build_index(root: str,
       - Other channel paths are derived by string substitution — zero extra stat calls
       - Results cached to JSON so the scan only runs once per dataset folder
     """
+    # NOTE on caching: writing is disabled below (fast enough on local SSD),
+    # but reading was NOT — meaning any .index_cache.json left over from an
+    # EARLIER version of this function (this file has changed many times
+    # over the project's history: REQUIRED_CHANNELS, the degeneracy check,
+    # etc.) would be silently trusted forever with zero staleness check.
+    # This caused a real bug: one region loaded a stale cache and produced
+    # 0 valid sequences while a sibling region (no cache file) rebuilt fine.
+    # Only load a cache if the CALLER explicitly passes cache_path — the
+    # auto-derived default path is for the (currently unused) write side
+    # only, never auto-read.
+    _auto_derived = cache_path is None
     if cache_path is None:
         cache_path = str(Path(root) / ".index_cache.json")
 
-    # --- Load from cache ---
-    if os.path.exists(cache_path):
+    # --- Load from cache (opt-in only — see note above) ---
+    if not _auto_derived and os.path.exists(cache_path):
         logger.info(f"  Loading index cache: {Path(cache_path).name}")
         with open(cache_path) as f:
             raw_json = json.load(f)
