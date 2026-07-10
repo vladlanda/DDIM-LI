@@ -71,7 +71,7 @@ def main():
     )
     p.add_argument("roots",       nargs="+",
                    help="One or more dataset root directories")
-    p.add_argument("--channels",  nargs="+", default=["ir", "li", "ch1", "ch2"])
+    p.add_argument("--channels",  nargs="+", default=["ir", "li"])
     p.add_argument("--T_in",      type=int,  default=6)
     p.add_argument("--T_out",     type=int,  default=36)
     p.add_argument("--n_seq",     type=int,  default=300,

@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 
 from dataset import METSATDataset, denormalize
-from model   import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule, edm_sampler
+from model   import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule, edm_sampler, compute_in_ch
 from evaluate import forecast, plot_forecast
 
 logging.basicConfig(level=logging.INFO,
@@ -48,10 +48,7 @@ def load_model(checkpoint: str, device: torch.device):
 
     binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
     ctx_channels  = ckpt_args.get("ctx_channels", None)
-    C_ctx_sel     = len(ctx_channels) if ctx_channels else C
-    li_in_ctx     = (ctx_channels is None) or ("li" in ctx_channels)
-    C_ctx         = C_ctx_sel + 1 if (binary_li_ctx and li_in_ctx) else C_ctx_sel
-    in_ch         = C + T_in * C_ctx + C
+    in_ch = compute_in_ch(C, T_in, ctx_channels, binary_li_ctx)
 
     unet    = UNet(
         in_channels      = in_ch,

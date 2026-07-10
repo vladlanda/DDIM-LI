@@ -23,11 +23,17 @@ test_roots:
 # Temporal split — first 80% train, last 20% validation (no leakage)
 train_val_split: 0.8
 
+# 2-channel model: ir105 + li only. ch0(ir87)/ch1(ir97)/ch2(ir123) were
+# tested and dropped — pre-registered, sequence-bootstrap-CI'd conditional
+# information tests (existence regime, level AND ~2h tendency) found none
+# of the three added information beyond ir105 level + ir105 tendency + LI
+# history: ir97 sat at the RANDOM null in every test; ir87 and ir123
+# tendency both failed the pre-specified decision rule (CI did not clear
+# the ir105-tendency floor). See test_ir123_tendency_hypothesis.py and
+# diagnose_cooling_rate.py for the evidence chain.
 channels:
   - ir
   - li
-  - ch0
-  - ch1
 
 T_in:    36         # context frames  (18 × 10 min = 3 hours)
 T_out:   6          # forecast steps  (6  × 10 min = 1 hour)
@@ -44,7 +50,8 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
-sigma_data:        0.62            # RMS of normalised residuals — MUST be measured.
+sigma_data:        0.62            # PLACEHOLDER — MUST be re-measured for this channel
+                                  # set (out_channels changed 4->2, RMS of residuals changes).
                                   # Run: python check_residual_stats.py <train_roots>
                                   # Typical range for normalised residuals: 0.2-0.5.
                                   # Wrong value biases EDM preconditioner (Karras 2022).
@@ -123,8 +130,8 @@ val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nonelbo_v6_256_T36_LIctx
-resume:          false             # new architecture: in_ch 116→188
+output_dir:      outputs/nature_v6_256_T36_ir_li_only
+resume:          false             # new architecture: in_ch 188->112 (2ch, dropped ch0/ch1)
 wandb_project:   "DDIM-LI"
 
 # LI event threshold for binarisation (evaluation only)

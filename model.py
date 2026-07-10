@@ -739,3 +739,25 @@ def training_loss(
             + asym_weight    * L_asym
             + nbr_weight     * L_nbr
             + spectral_weight * L_spec)
+
+
+# =====================================================================
+# Shared input-channel arithmetic — single source of truth.
+# Previously this formula was independently duplicated in train.py,
+# evaluate.py, and infer.py. All three were consistent, but duplication
+# is exactly how such formulas silently drift after a future edit.
+# =====================================================================
+def compute_in_ch(C: int, T_in: int, ctx_channels, binary_li_ctx: bool) -> int:
+    """
+    Total UNet input channels: noisy target (C) + flattened context
+    (T_in * C_ctx) + channel-presence mask (C).
+
+    C_ctx = number of channels per context frame:
+        len(ctx_channels) if a subset is specified, else C (all channels),
+        +1 if binary_li_ctx is on AND "li" is among the context channels
+        (an extra binary LI-presence mask is appended per frame).
+    """
+    C_ctx_sel = len(ctx_channels) if ctx_channels else C
+    li_in_ctx = (ctx_channels is None) or ("li" in ctx_channels)
+    C_ctx     = C_ctx_sel + 1 if (binary_li_ctx and li_in_ctx) else C_ctx_sel
+    return C + T_in * C_ctx + C

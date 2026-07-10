@@ -817,17 +817,25 @@ def _display_ranges(ref_frames: np.ndarray, channels: List[str],
 def _make_rgb(frames: np.ndarray, channels: List[str],
               ranges: Optional[dict] = None) -> np.ndarray:
     """
-    Compose a false-colour RGB image from ir/ch0/ch1 channels.
+    Compose a display image from the non-LI (cloud/IR) channels.
     frames: (C, H, W) denormalised.
     ranges: {channel: (lo, hi)} fixed display range shared across all rows.
             If None, falls back to per-image min-max (legacy; not comparable).
     Returns (H, W, 3) uint8.
+
+    Channel-count agnostic: previously hardcoded ir/ch0/ch1, which silently
+    zeroed G and B (producing a red-tinted, uninformative image) whenever
+    fewer than 3 cloud channels were configured — as with a 2-channel
+    (ir, li) model. Now picks up to 3 available non-LI channels, preferring
+    "ir" first, and repeats the last available channel into any unfilled
+    slot so a single-channel model renders as true grayscale (R=G=B).
     """
+    non_li = [c for c in channels if c != "li"]
+    ordered = (["ir"] if "ir" in non_li else []) + [c for c in non_li if c != "ir"]
+    slots = (ordered + ordered[-1:] * 3)[:3] if ordered else []
+
     def _pull(ch):
-        if ch in channels:
-            arr = frames[channels.index(ch)].astype(np.float32)
-        else:
-            return np.zeros(frames.shape[-2:], dtype=np.uint8)
+        arr = frames[channels.index(ch)].astype(np.float32)
         if ranges is not None and ch in ranges:
             lo, hi = ranges[ch]
         else:
@@ -835,10 +843,10 @@ def _make_rgb(frames: np.ndarray, channels: List[str],
         out = (arr - lo) / (hi - lo + 1e-8)
         return (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
 
-    r = _pull("ir")
-    g = _pull("ch0")
-    b = _pull("ch1")
-    return np.stack([r, g, b], axis=-1)   # (H, W, 3)
+    if not slots:
+        z = np.zeros(frames.shape[-2:], dtype=np.uint8)
+        return np.stack([z, z, z], axis=-1)
+    return np.stack([_pull(ch) for ch in slots], axis=-1)   # (H, W, 3)
 
 
 def _make_li(frames: np.ndarray, channels: List[str],
@@ -873,9 +881,13 @@ def plot_forecast(
     Layout: rows × columns grid.
 
       Rows (2 or 3):
-        Row 0 — Context    : last context frame  [IR+CH0+CH1 | LI]
-        Row 1 — Prediction : ens-mean            [IR+CH0+CH1 | LI | LI-spread]
-        Row 2 — Ground Truth (only if gt_np):    [IR+CH0+CH1 | LI]
+        Row 0 — Context    : last context frame  [cloud/IR composite | LI]
+        Row 1 — Prediction : ens-mean            [cloud/IR composite | LI | LI-spread]
+        Row 2 — Ground Truth (only if gt_np):    [cloud/IR composite | LI]
+
+      The "cloud/IR composite" is built by _make_rgb from up to 3 of the
+      model's non-LI channels: 3 -> false-colour, 2 -> two distinct bands,
+      1 -> true grayscale (e.g. the 2-channel ir+li configuration).
 
       Columns: one group of 3 sub-columns per forecast step
                (+10min, +20min, … up to T_out×dt_min)
@@ -989,9 +1001,13 @@ def plot_forecast(
         for spine in axes[r, 0].spines.values():
             spine.set_visible(False)
 
-    # Sub-column header legend (once, top-right)
+    # Sub-column header legend (once, top-right). Built from the actual
+    # channel set rather than a hardcoded "IR+CH0+CH1" label, which would
+    # be wrong (and silently misleading) for any model with <3 cloud/IR
+    # channels — e.g. the 2-channel (ir, li) configuration.
+    _cloud_label = "+".join(c.upper() for c in channels if c != "li") or "—"
     fig.text(0.99, 0.99,
-             "Pred cols: [IR+CH0+CH1 | LI | LI-spread]",
+             f"Pred cols: [{_cloud_label} | LI | LI-spread]",
              ha="right", va="top", fontsize=7, color="#555555",
              transform=fig.transFigure)
 
@@ -1488,7 +1504,7 @@ def run_test_evaluation(args):
     logger.info(f"Device: {device}")
 
     # ---- Load checkpoint ----
-    from model import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule
+    from model import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule, compute_in_ch
 
     ckpt      = torch.load(args.checkpoint, map_location=device)
     # Older checkpoints may not have "args" saved.
@@ -1517,10 +1533,7 @@ def run_test_evaluation(args):
     # Reconstruct input channels exactly as in train.py build_model
     binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
     ctx_channels  = ckpt_args.get("ctx_channels", None)
-    C_ctx_sel     = len(ctx_channels) if ctx_channels else C
-    _li_in_ctx    = (ctx_channels is None) or ("li" in ctx_channels)
-    C_ctx  = C_ctx_sel + 1 if (binary_li_ctx and _li_in_ctx) else C_ctx_sel
-    in_ch  = C + T_in * C_ctx + C   # noisy + context + mask
+    in_ch = compute_in_ch(C, T_in, ctx_channels, binary_li_ctx)
 
     unet = UNet(
         in_channels      = in_ch,

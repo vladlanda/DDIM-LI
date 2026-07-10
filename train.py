@@ -54,7 +54,7 @@ except ImportError:
 from dataset import make_dataloaders
 from model import (
     UNet, EDMPrecond, MultiStepDenoiser,
-    EDMSchedule, training_loss,
+    EDMSchedule, training_loss, compute_in_ch,
 )
 from evaluate import evaluate_epoch, fast_val_metrics
 
@@ -123,15 +123,7 @@ def ddp_active() -> bool:
 # ===================================================================
 
 def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDenoiser:
-    # Input channels:
-    #   noisy residual   : C  (all data channels)
-    #   context frames   : T_in * C_ctx
-    #     C_ctx = len(ctx_channels) or C, +1 if binary_li_ctx and LI in ctx
-    #   channel mask     : C
-    C_ctx_sel = len(args.ctx_channels) if args.ctx_channels else C
-    _li_in_ctx = (args.ctx_channels is None) or ("li" in args.ctx_channels)
-    C_ctx  = C_ctx_sel + 1 if (args.binary_li_ctx and _li_in_ctx) else C_ctx_sel
-    in_ch  = C + T_in * C_ctx + C
+    in_ch = compute_in_ch(C, T_in, args.ctx_channels, args.binary_li_ctx)
     unet   = UNet(
         in_channels      = in_ch,
         out_channels     = C,

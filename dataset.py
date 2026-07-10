@@ -96,6 +96,12 @@ def compute_or_load_stats(
         ch = fp.stem.split("_")[-1]
         if ch not in channel_list:
             continue
+        # Skip degenerate (all-black) IR files so a corrupt frame doesn't bias
+        # the mean/std used for normalisation. Uses the same size heuristic as
+        # build_index()'s _is_usable — cheap (stat() only) since we already
+        # need to open the file next line regardless.
+        if not _is_usable(fp, ch):
+            continue
         img = np.array(Image.open(fp).convert("L"), dtype=np.float32) / 255.0
         accum[ch].append(img.ravel())
 
@@ -391,6 +397,14 @@ class METSATDataset(Dataset):
         self.ctx_channels   = ctx_channels
         # ctx_idx: indices of channels to include in context
         if ctx_channels is not None:
+            _missing = [c for c in ctx_channels if c not in channel_list]
+            if _missing:
+                raise ValueError(
+                    f"ctx_channels {_missing} not in channel_list {channel_list}. "
+                    f"Silently dropping them would make the dataset's context "
+                    f"tensor narrower than compute_in_ch()'s prediction, causing "
+                    f"a shape mismatch at the first training step."
+                )
             self.ctx_idx = [channel_list.index(c) for c in ctx_channels
                             if c in channel_list]
         else:
