@@ -50,7 +50,7 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
-sigma_data:        0.62            # PLACEHOLDER — MUST be re-measured for this channel
+sigma_data:        0.68            # PLACEHOLDER — MUST be re-measured for this channel
                                   # set (out_channels changed 4->2, RMS of residuals changes).
                                   # Run: python check_residual_stats.py <train_roots>
                                   # Typical range for normalised residuals: 0.2-0.5.
@@ -68,7 +68,7 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         300
+epochs:         999
 batch_size:     16
 lr:             2.0e-4
 weight_decay:   0.0               # EMA already regularises (Karras 2022)
@@ -130,7 +130,7 @@ val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nature_v6_256_T36_ir_li_only
+output_dir:      outputs/nature_256_T36_ir_li_only
 resume:          false             # new architecture: in_ch 188->112 (2ch, dropped ch0/ch1)
 wandb_project:   "DDIM-LI"
 
