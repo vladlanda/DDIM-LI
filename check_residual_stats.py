@@ -72,8 +72,10 @@ def main():
     p.add_argument("roots",       nargs="+",
                    help="One or more dataset root directories")
     p.add_argument("--channels",  nargs="+", default=["ir", "li"])
-    p.add_argument("--T_in",      type=int,  default=6)
-    p.add_argument("--T_out",     type=int,  default=36)
+    p.add_argument("--T_in",      type=int,  default=36,
+                   help="Context frames (must match configs/default.yaml).")
+    p.add_argument("--T_out",     type=int,  default=6,
+                   help="Forecast steps (must match configs/default.yaml).")
     p.add_argument("--n_seq",     type=int,  default=300,
                    help="Sequences to sample per root (default: 300)")
     p.add_argument("--stat_path", default=None,
