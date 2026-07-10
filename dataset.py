@@ -577,6 +577,15 @@ def compute_li_sample_weights(
         logger.warning("compute_li_sample_weights: no LI channel, returning uniform weights")
         return np.ones(len(dataset), dtype=np.float64)
 
+    if len(dataset) == 0:
+        # np.percentile on an empty array raises an opaque IndexError deep
+        # inside numpy internals. An empty dataset here means a genuine
+        # upstream problem (see the fail-fast check in make_dataloaders),
+        # but this function should not be the thing that crashes on it.
+        logger.warning(f"compute_li_sample_weights: dataset is empty ({dataset}), "
+                       f"returning empty weights array")
+        return np.zeros(0, dtype=np.float64)
+
     h, w = dataset.img_size
 
     # ── Pass 1: compute mean LI density per sequence (one frame per seq) ────
@@ -696,6 +705,20 @@ def make_dataloaders(
             f"{len(train_seqs)} train / {len(val_seqs)} val  "
             f"(split={train_val_split:.0%})"
         )
+        if len(train_seqs) == 0:
+            raise RuntimeError(
+                f"Region '{ds.root}' has ZERO training sequences "
+                f"(n={n} total valid sequences before splitting). "
+                f"This means build_index() found no run of T_in+T_out="
+                f"{T_in + T_out} consecutive timesteps with all of "
+                f"{REQUIRED_CHANNELS} present for this region. Likely causes: "
+                f"(1) the path does not exist or is empty on disk, "
+                f"(2) the channel_list/REQUIRED_CHANNELS filenames don't match "
+                f"the actual files in this directory, or "
+                f"(3) a stale cached index (delete any cache and retry). "
+                f"Continuing would fail later with an opaque numpy error "
+                f"inside compute_li_sample_weights()."
+            )
 
     class _ConcatDS(Dataset):
         def __init__(self, datasets):
