@@ -1,11 +1,17 @@
 """
-ONE pre-registered test. No sweeping.
+ONE pre-registered test per channel. No sweeping.
 
-HYPOTHESIS (fixed before running):
-    The cooling TENDENCY of ir123 over the convective-development timescale
-    (~2h, per the saturation found in diagnose_cooling_rate.py) carries
-    EXISTENCE information about lightning at +40 to +60 min, BEYOND what
-    ir105's own level and ir105's own tendency already explain.
+HYPOTHESIS (fixed before running, same form for every --target_ch):
+    The cooling TENDENCY of the target channel over the convective-
+    development timescale (~2h, per the saturation found in
+    diagnose_cooling_rate.py) carries EXISTENCE information about
+    lightning at +40 to +60 min, BEYOND what ir105's own level and
+    ir105's own tendency already explain.
+
+    Run ONCE per channel (ir123, then ir87) with the SAME statistic,
+    CI method, and decision rule. Not a sweep: each channel's test is
+    independent and pre-registered on its own, before seeing that
+    channel's result.
 
 STATISTIC (fixed before running):
     Conditional |AUC-0.5| of d_ch2 = -(ir123[t0] - ir123[t0-12]) against
@@ -90,7 +96,13 @@ def main():
     p.add_argument("--n_ir_bins", type=int, default=20)
     p.add_argument("--n_dir_bins", type=int, default=5)
     p.add_argument("--n_boot", type=int, default=500)
+    p.add_argument("--target_ch", choices=["ch2", "ch0", "ch1"], default="ch2",
+                   help="Channel under test: ch2=ir123, ch0=ir87, ch1=ir97.")
+    p.add_argument("--target_name", default=None,
+                   help="Display name (default: inferred from --target_ch).")
     args = p.parse_args()
+    _names = {"ch2": "ir123", "ch0": "ir87", "ch1": "ir97"}
+    target_name = args.target_name or _names[args.target_ch]
 
     LEADS = [40, 50, 60]  # fixed by the hypothesis, minutes
     lead_steps = [t for t in range(args.T_out) if (t + 1) * args.dt_min in LEADS]
@@ -119,10 +131,10 @@ def main():
 
         ir0  = denormalize(t0[ci["ir"]],  stats, "ir")
         irp  = denormalize(tp[ci["ir"]],  stats, "ir")
-        ch2_0 = denormalize(t0[ci["ch2"]], stats, "ch2")
-        ch2_p = denormalize(tp[ci["ch2"]], stats, "ch2")
+        tgt_0 = denormalize(t0[ci[args.target_ch]], stats, args.target_ch)
+        tgt_p = denormalize(tp[ci[args.target_ch]], stats, args.target_ch)
         d_ir  = -(ir0 - irp)          # ir105 tendency (positive = cooled)
-        d_ch2 = -(ch2_0 - ch2_p)      # ir123 tendency
+        d_ch2 = -(tgt_0 - tgt_p)      # target channel's tendency
 
         li_hist = np.zeros_like(ir0, dtype=bool)
         for k in range(1, 7):
@@ -171,11 +183,11 @@ def main():
     pt_null,   lo_null,   hi_null   = boot_ci(RAND)
 
     print("=" * 70)
-    print("PRE-REGISTERED TEST: d_ch2(ir123 tendency), EXISTENCE, +40/50/60min")
+    print(f"PRE-REGISTERED TEST: d_{target_name} tendency, EXISTENCE, +40/50/60min")
     print("=" * 70)
     print(f"{'quantity':<22}{'point':>8}{'95% CI':>20}")
     print("-" * 50)
-    print(f"{'d_ch2 (target)':<22}{pt_target:>8.4f}   [{lo_target:.4f}, {hi_target:.4f}]")
+    print(f"{'d_'+target_name+' (target)':<22}{pt_target:>8.4f}   [{lo_target:.4f}, {hi_target:.4f}]")
     print(f"{'d_ir105 (floor)':<22}{pt_floor:>8.4f}   [{lo_floor:.4f}, {hi_floor:.4f}]")
     print(f"{'RANDOM (null)':<22}{pt_null:>8.4f}   [{lo_null:.4f}, {hi_null:.4f}]")
     print("-" * 50)
@@ -186,11 +198,11 @@ def main():
     print(f"\nDECISION RULE: d_ch2's CI entirely above RANDOM's CI AND above d_ir105's point estimate")
     print(f"VERDICT: {'SUPPORTED' if supported else 'NOT SUPPORTED'}")
     if not supported:
-        print("\n-> ir123 tendency adds nothing beyond ir105 level+tendency+LI history")
-        print("   in the existence regime at 40-60min. Do not add ir123 on this basis.")
+        print(f"\n-> {target_name} tendency adds nothing beyond ir105 level+tendency+")
+        print(f"   LI history in the existence regime at 40-60min. Do not add {target_name}.")
     else:
-        print("\n-> ir123 tendency carries existence information ir105 does not.")
-        print("   This is the ONE result to act on. No further feature sweep needed.")
+        print(f"\n-> {target_name} tendency carries existence information ir105 does not.")
+        print("   This is the result to act on for this channel.")
 
 
 if __name__ == "__main__":
