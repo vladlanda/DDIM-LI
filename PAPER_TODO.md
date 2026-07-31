@@ -44,11 +44,30 @@ with margin growing from +4.6% to +50.9%.
 
 ## Phase 2 — Close reviewer-critical gaps (not blocked by Phase 1)
 
-- [ ] Baseline beyond persistence. Leaning optical-flow extrapolation
-      (standard nowcasting comparator, no training required, and tests
-      our own positional-ceiling finding that displacement is incoherent
-      rather than advective — a clean, mutually-reinforcing result if it
-      holds). **Owner: me (implement) + user (run on test set).**
+- [x] Baseline beyond persistence — IMPLEMENTED. Optical-flow (pySTEPS-
+      style semi-Lagrangian extrapolation) baseline, native implementation
+      (Farneback dense flow + cv2.remap backward advection, no pysteps
+      dependency). Two variants per literature convention:
+        - `pysteps_li/run.py` (PRIMARY): flow derived from LI itself,
+          advecting LI — the standard convention (flow-source == forecast
+          target), matching how precip pySTEPS baselines use radar
+          reflectivity for both. Expected to perform poorly given LI
+          sparsity — a real, literature-consistent finding, not a bug.
+        - `pysteps_ir/run.py` (SECONDARY/robustness): flow derived from
+          the denser IR channel, advecting LI — gives optical flow its
+          strongest reasonable chance. Direct precedent in severe-
+          convection nowcasting literature (one motion field from the
+          primary field, applied to advect several target fields).
+      Output schema mirrors persistence_metrics.csv exactly for direct
+      three-way comparability (persistence / pysteps_li / pysteps_ir).
+      Core flow/advection math validated on synthetic moving-blob data:
+      exact velocity recovery, zero position error after multi-step
+      advection, correct stationary/k=0 edge cases.
+      **Owner: user — run both variants on the test set.**
+      ```
+      python pysteps_li/run.py --config configs/evaluate.yaml
+      python pysteps_ir/run.py --config configs/evaluate.yaml
+      ```
 - [ ] Sequence-level bootstrap CIs on the headline PR-AUC comparisons
       (model vs. persistence, model vs. new baseline). Same discipline as
       the channel-information pre-registered tests — resample sequences,
