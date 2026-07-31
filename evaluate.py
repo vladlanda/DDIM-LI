@@ -1820,6 +1820,32 @@ def run_test_evaluation(args):
                     row["pr_auc"] = auc_by_step[t]
         per_step.append(row)
 
+    # Horizon buckets scaled by ACTUAL T_out*dt_min, not hardcoded step counts.
+    # Previously used crps_arr[:6]/[:18]/[-1] assuming dt_min=10 and a long
+    # (T_out=36, 6h) model. For a shorter model (e.g. T_out=6, max lead 60min)
+    # [:6] and [:18] both silently clip to ALL available steps -- "1h" and
+    # "3h" collapsed to be identical to the overall mean, and "6h" was really
+    # just the single last-step value mislabeled as a 6-hour horizon.
+    max_lead_min = T_out * dt_min
+
+    def _bucket(vals, horizon_min):
+        """Mean of steps whose lead time is <= horizon_min. None if the
+        model's forecast doesn't reach that horizon at all."""
+        if max_lead_min < horizon_min:
+            return None
+        n = sum(1 for lt in lead_times if lt <= horizon_min)
+        return _mean(vals[:max(n, 1)])
+
+    horizon_buckets = {}
+    for label, mins in [("1h", 60), ("3h", 180), ("6h", 360)]:
+        if max_lead_min >= mins:
+            horizon_buckets[label] = mins
+    # Always include the shortest and longest available lead explicitly,
+    # self-labelled with the real lead time, so short-horizon models (e.g.
+    # T_out=6, max 60min) still get an honest short-vs-long comparison
+    # instead of a misleading "6h" label that doesn't apply to them.
+    short_lead, long_lead = lead_times[0], lead_times[-1]
+
     fss_summary = {}
     if li_idx is not None:
         for thr in fss_prob_thresholds:
@@ -1829,17 +1855,27 @@ def run_test_evaluation(args):
                 )
 
     # Scalar summary (mean over time for each channel)
+    crps_vals = [r["crps"] for r in per_step]
     summary = {
         "checkpoint":   args.checkpoint,
         "test_roots":   args.test_roots,
         "n_sequences":  seq_counter,
         "n_members":    args.n_members,
-        "crps_mean":    _mean([r["crps"] for r in per_step]),
-        "crps_1h":      _mean([r["crps"] for r in per_step[:6]]),
-        "crps_3h":      _mean([r["crps"] for r in per_step[:18]]),
-        "crps_6h":      per_step[-1]["crps"],
+        "max_lead_min": max_lead_min,   # documents what this model's horizon actually is
+        "crps_mean":    _mean(crps_vals),
+        f"crps_+{short_lead}min": crps_vals[0],
+        f"crps_+{long_lead}min":  crps_vals[-1],
         "spread_skill": _mean([r["spread_skill"] for r in per_step]),
     }
+    for label, mins in horizon_buckets.items():
+        summary[f"crps_{label}"] = _bucket(crps_vals, mins)
+    if "pr_auc" in per_step[0]:
+        pr_auc_vals = [r["pr_auc"] for r in per_step]
+        summary["pr_auc_mean"] = _mean(pr_auc_vals)
+        summary[f"pr_auc_+{short_lead}min"] = pr_auc_vals[0]
+        summary[f"pr_auc_+{long_lead}min"]  = pr_auc_vals[-1]
+        for label, mins in horizon_buckets.items():
+            summary[f"pr_auc_{label}"] = _bucket(pr_auc_vals, mins)
     for ch in cloud_chs:
         summary[f"rmse_{ch}_mean"] = _mean([r[f"rmse_{ch}"] for r in per_step])
         summary[f"mae_{ch}_mean"]  = _mean([r[f"mae_{ch}"]  for r in per_step])
@@ -1849,9 +1885,12 @@ def run_test_evaluation(args):
     if li_idx is not None:
         li_summary = {"brier_mean": _mean([r["brier"] for r in per_step])}
         for thr in fss_prob_thresholds:
-            li_summary[f"csi_mean_thr{thr}"] = _mean([r[f"csi_{thr}"] for r in per_step])
-            li_summary[f"csi_1h_thr{thr}"]   = _mean([r[f"csi_{thr}"] for r in per_step[:6]])
-            li_summary[f"csi_6h_thr{thr}"]   = per_step[-1][f"csi_{thr}"]
+            csi_vals = [r[f"csi_{thr}"] for r in per_step]
+            li_summary[f"csi_mean_thr{thr}"] = _mean(csi_vals)
+            li_summary[f"csi_+{short_lead}min_thr{thr}"] = csi_vals[0]
+            li_summary[f"csi_+{long_lead}min_thr{thr}"]  = csi_vals[-1]
+            for label, mins in horizon_buckets.items():
+                li_summary[f"csi_{label}_thr{thr}"] = _bucket(csi_vals, mins)
             li_summary[f"pod_mean_thr{thr}"]  = _mean([r[f"pod_{thr}"] for r in per_step])
             li_summary[f"far_mean_thr{thr}"]  = _mean([r[f"far_{thr}"] for r in per_step])
         summary.update({**li_summary, **fss_summary})
@@ -1909,12 +1948,30 @@ def run_test_evaluation(args):
 
     # ---- Print summary ----
     logger.info("\n" + "=" * 52)
-    logger.info("  CLOUD METRICS")
+    logger.info(f"  CLOUD METRICS  (max_lead={max_lead_min}min)")
     logger.info("=" * 52)
-    for k in ["crps_mean","crps_1h","crps_3h","crps_6h",
-              "rmse_mean","mae_mean","ssim_mean","spread_skill"]:
-        if k in summary:
+    for k in (["crps_mean", f"crps_+{short_lead}min", f"crps_+{long_lead}min"]
+              + [f"crps_{lb}" for lb in horizon_buckets]):
+        if k in summary and summary[k] is not None:
             logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+    # rmse_{ch}_mean / mae_{ch}_mean / ssim_{ch}_mean are per-channel (cloud_chs
+    # may have zero or more entries, e.g. [] for an li-only channel set, or
+    # ["ir"] for the 2-channel ir+li model) -- there is no flat "rmse_mean" key.
+    for ch in cloud_chs:
+        for prefix in ["rmse", "mae", "ssim"]:
+            k = f"{prefix}_{ch}_mean"
+            if k in summary:
+                logger.info(f"  {k:<22s}: {summary[k]:.4f}")
+    if "spread_skill" in summary:
+        logger.info(f"  {'spread_skill':<22s}: {summary['spread_skill']:.4f}")
+    if "pr_auc_mean" in summary:
+        logger.info("\n" + "=" * 52)
+        logger.info("  PR-AUC (lightning discrimination)")
+        logger.info("=" * 52)
+        for k in (["pr_auc_mean", f"pr_auc_+{short_lead}min", f"pr_auc_+{long_lead}min"]
+                  + [f"pr_auc_{lb}" for lb in horizon_buckets]):
+            if k in summary and summary[k] is not None:
+                logger.info(f"  {k:<22s}: {summary[k]:.4f}")
     if li_idx is not None:
         logger.info("\n" + "=" * 52)
         logger.info("  LIGHTNING METRICS")
@@ -1922,9 +1979,11 @@ def run_test_evaluation(args):
         logger.info(f"  {'brier_mean':<28s}: {summary.get('brier_mean', float('nan')):.4f}")
         for thr in fss_prob_thresholds:
             logger.info(f"  --- prob threshold = {thr} ---")
-            for k in [f"csi_mean_thr{thr}", f"csi_1h_thr{thr}",
-                      f"pod_mean_thr{thr}", f"far_mean_thr{thr}"]:
-                if k in summary:
+            for k in ([f"csi_mean_thr{thr}", f"csi_+{short_lead}min_thr{thr}",
+                       f"csi_+{long_lead}min_thr{thr}"]
+                      + [f"csi_{lb}_thr{thr}" for lb in horizon_buckets]
+                      + [f"pod_mean_thr{thr}", f"far_mean_thr{thr}"]):
+                if k in summary and summary[k] is not None:
                     logger.info(f"  {k:<28s}: {summary[k]:.4f}")
         for k in sorted(k for k in summary if k.startswith("fss_thr")):
             logger.info(f"  {k:<28s}: {summary[k]:.4f}")
