@@ -126,6 +126,11 @@ def run_persistence_evaluation(args):
     rmse_by_step  = [[] for _ in range(T_out)]
     pr_probs      = {t: [] for t in pr_steps}
     pr_labels     = {t: [] for t in pr_steps}
+    pr_seqids     = {t: [] for t in pr_steps}   # which test sequence each
+                                                 # pixel came from -- enables
+                                                 # sequence-level (not pixel-
+                                                 # level) bootstrap CIs later.
+    seq_counter = 0   # increments once per test SEQUENCE (not per pixel/lead)
 
     # ── Evaluation loop
     batch_bar = tqdm(test_loader, desc="Persistence eval", unit="batch",
@@ -204,6 +209,10 @@ def run_persistence_evaluation(args):
                     flat_lbl  = obs_bin.ravel()[::stride]
                     pr_probs[t].append(flat_prob)
                     pr_labels[t].append(flat_lbl)
+                    pr_seqids[t].append(np.full(flat_prob.shape, seq_counter,
+                                                dtype=np.int32))
+
+            seq_counter += 1   # one test sequence fully processed
 
     # ── Compute PR-AUC + save full PR curves for overlay plotting
     auc_by_step = {}
@@ -236,8 +245,19 @@ def run_persistence_evaluation(args):
             npz_payload[f"cal_frac_{t}"] = frac_pos.astype(np.float32)
         except Exception as e:
             logger.warning(f"Persistence calibration failed at step {t}: {e}")
+        # Raw prob/label/seqid arrays -- enables a proper SEQUENCE-level (not
+        # pixel-level) bootstrap CI to be computed later without re-running
+        # this (expensive) evaluation. seqid ties each pixel back to which
+        # test sequence it came from; resampling seqid-blocks (not
+        # individual pixels) is required for a valid CI given strong
+        # within-scene pixel correlation.
+        if t in pr_probs and pr_probs[t]:
+            npz_payload[f"pr_prob_{t}"]  = np.concatenate(pr_probs[t]).astype(np.float32)
+            npz_payload[f"pr_label_{t}"] = np.concatenate(pr_labels[t]).astype(np.int32)
+            npz_payload[f"pr_seqid_{t}"] = np.concatenate(pr_seqids[t]).astype(np.int32)
     npz_payload["pr_steps"] = np.array(list(pr_curves.keys()))
     npz_payload["dt_min"]   = np.array(dt_min)
+    npz_payload["n_sequences"] = np.array(seq_counter)
     pr_npz = os.path.join(args.output_dir, "persistence_pr_curves.npz")
     np.savez_compressed(pr_npz, **npz_payload)
     logger.info(f"Persistence PR + calibration curves -> {pr_npz}")

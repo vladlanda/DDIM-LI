@@ -1607,6 +1607,10 @@ def run_test_evaluation(args):
     pr_steps  = list(range(T_out))
     pr_probs  = {t: [] for t in pr_steps}
     pr_labels = {t: [] for t in pr_steps}
+    pr_seqids = {t: [] for t in pr_steps}   # which test sequence each pixel
+                                             # came from -- enables sequence-
+                                             # level (not pixel-level)
+                                             # bootstrap CIs later.
     cal_probs  = {t: [] for t in pr_steps}
     cal_labels = {t: [] for t in pr_steps}
     auc_by_step: dict = {}   # computed after all batches, before CSV row building
@@ -1696,6 +1700,8 @@ def run_test_evaluation(args):
                         stride    = max(1, len(flat_prob) // 4096)
                         pr_probs[t].append(flat_prob[::stride])
                         pr_labels[t].append(flat_lbl[::stride])
+                        pr_seqids[t].append(np.full(flat_prob[::stride].shape,
+                                                    seq_counter, dtype=np.int32))
                         cal_probs[t].append(flat_prob[::stride])
                         cal_labels[t].append(flat_lbl[::stride])
 

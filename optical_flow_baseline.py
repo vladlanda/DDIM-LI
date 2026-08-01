@@ -214,6 +214,8 @@ def run_optical_flow_evaluation(args):
     rmse_by_step  = [[] for _ in range(T_out)]
     pr_probs      = {t: [] for t in pr_steps}
     pr_labels     = {t: [] for t in pr_steps}
+    pr_seqids     = {t: [] for t in pr_steps}
+    seq_counter = 0
 
     batch_bar = tqdm(test_loader, desc=f"Optical-flow[{args.flow_source}] eval",
                      unit="batch", dynamic_ncols=True)
@@ -281,6 +283,10 @@ def run_optical_flow_evaluation(args):
                     flat_lbl  = obs_bin.ravel()[::stride]
                     pr_probs[t].append(flat_prob)
                     pr_labels[t].append(flat_lbl)
+                    pr_seqids[t].append(np.full(flat_prob.shape, seq_counter,
+                                                dtype=np.int32))
+
+            seq_counter += 1   # one test sequence fully processed
 
     auc_by_step = {}
     pr_curves   = {}
@@ -310,8 +316,13 @@ def run_optical_flow_evaluation(args):
             npz_payload[f"cal_frac_{t}"] = frac_pos.astype(np.float32)
         except Exception as e:
             logger.warning(f"Calibration failed at step {t}: {e}")
+        if t in pr_probs and pr_probs[t]:
+            npz_payload[f"pr_prob_{t}"]  = np.concatenate(pr_probs[t]).astype(np.float32)
+            npz_payload[f"pr_label_{t}"] = np.concatenate(pr_labels[t]).astype(np.int32)
+            npz_payload[f"pr_seqid_{t}"] = np.concatenate(pr_seqids[t]).astype(np.int32)
     npz_payload["pr_steps"] = np.array(list(pr_curves.keys()))
     npz_payload["dt_min"]   = np.array(dt_min)
+    npz_payload["n_sequences"] = np.array(seq_counter)
     tag = f"optical_flow_{args.flow_source}"
     pr_npz = os.path.join(args.output_dir, f"{tag}_pr_curves.npz")
     np.savez_compressed(pr_npz, **npz_payload)
