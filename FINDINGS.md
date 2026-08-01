@@ -142,9 +142,18 @@ New data: 99.2% coverage, longest run 433h. **Worth a sentence in
 Methods/Data or supplementary** as a documented data-quality control step,
 without necessarily dwelling on the unresolved root-cause mystery.
 
----
-
-## E. Physical / scientific findings (candidates for Results or Discussion)
+### D3. evaluate.py's pr_seqid save was missing — CONFIRMED, fixed before any compute spent
+Code review pass (prompted deliberately before launching the expensive
+model evaluation) found the seqid-tracking patch was only half-applied
+to evaluate.py: accumulated in memory during the loop, never written to
+the npz. persistence_baseline.py and optical_flow_baseline.py were both
+correct. Would have silently discarded the data needed for the bootstrap
+CI on the paper's headline comparison, on exactly the one run that's
+expensive to redo. Caught by a deliberate "review before spending GPU
+time" pass, not by running and failing. Fixed and verified end-to-end
+with a synthetic save/load test before trusting it.
+**Lesson for process, not for the paper:** worth doing one more such
+review pass before any other expensive/one-shot run in this project.
 
 ### E1. Positional-vs-existence error decomposition at long lead time — CONFIRMED (on an earlier model; PENDING re-run on final model)
 At high confidence threshold, +60min error is POSITIONAL (skillful at
