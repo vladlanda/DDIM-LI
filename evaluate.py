@@ -1944,6 +1944,7 @@ def run_test_evaluation(args):
         if pr_probs[t]:
             npz_payload[f"pr_prob_{t}"]   = np.concatenate(pr_probs[t])
             npz_payload[f"pr_label_{t}"]  = np.concatenate(pr_labels[t])
+            npz_payload[f"pr_seqid_{t}"]  = np.concatenate(pr_seqids[t]).astype(np.int32)
             npz_payload[f"cal_prob_{t}"]  = np.concatenate(cal_probs[t])
             npz_payload[f"cal_label_{t}"] = np.concatenate(cal_labels[t])
     np.savez_compressed(npz_path, **npz_payload)
