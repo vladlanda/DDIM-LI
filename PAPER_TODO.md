@@ -68,25 +68,9 @@ with margin growing from +4.6% to +50.9%.
       python pysteps_li/run.py --config configs/evaluate.yaml
       python pysteps_ir/run.py --config configs/evaluate.yaml
       ```
-- [x] Sequence-level bootstrap CIs — INFRASTRUCTURE READY. All three
-      evaluation scripts now tag pixels with their source test-sequence
-      ID and save it to their npz output; `bootstrap_pr_auc_ci.py` does
-      paired sequence-level (not pixel-level) bootstrap on any
-      model-vs-baseline comparison. A real bug was caught and fixed
-      during validation (mask-based resampling silently collapsed
-      duplicate draws, understating variance) — see commit for details.
-      **Still needed: re-run evaluate.py / persistence_baseline.py /
-      pysteps_li / pysteps_ir once more so their npz outputs contain the
-      new pr_seqid_* arrays (the CSVs you already have don't need
-      re-running, only the npz side needs regenerating), then run:**
-      ```
-      python bootstrap_pr_auc_ci.py \
-          --npz outputs/nature_256_T36_ir_li_only/eval/plot_data.npz \
-          --baseline persistence:outputs/persistence_baseline_new/persistence_pr_curves.npz \
-          --baseline pysteps_li:pysteps_li/optical_flow_li_pr_curves.npz \
-          --baseline pysteps_ir:pysteps_ir/optical_flow_ir_pr_curves.npz \
-          --label model --dt_min 10 --n_boot 1000
-      ```
+- [x] Sequence-level bootstrap CIs — DONE. All 18 comparisons (3 baselines
+      × 6 leads) significant, margin grows monotonically with lead time
+      against all three baselines. See FINDINGS.md B1 for the numbers.
 - [ ] Re-run FSS-threshold + positional-ceiling error decomposition on
       the FINAL model (currently only validated on an older model/data).
       Existing diagnostic scripts (diagnose_fss_scale.py,

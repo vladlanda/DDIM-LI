@@ -41,14 +41,23 @@ test-period character, drove the earlier degraded numbers.
 
 ## B. Statistical rigor (infrastructure built, not yet applied to final numbers)
 
-### B1. Sequence-level bootstrap CI infrastructure — CONFIRMED (built), PENDING (applied)
-All eval scripts now tag pixels by source test sequence; paired
-sequence-level bootstrap implemented in `bootstrap_pr_auc_ci.py`. A real
-bug was caught during validation (mask-based resampling silently
-collapsed duplicate draws, understating CI width by a lot — see commit).
-**TODO:** re-run eval scripts to regenerate npz with seqid arrays, then
-run the bootstrap CI on the A1/A2 comparison. This is what turns A1/A2
-from point estimates into a defensible statistical claim.
+### B1. Sequence-level bootstrap CI — CONFIRMED, applied to the headline comparison
+All 18 comparisons (3 baselines × 6 leads) are statistically significant
+(95% CI excludes zero), and critically, the margin GROWS monotonically
+with lead time against all three baselines simultaneously:
+  - vs persistence:  +0.036 (+10m) → +0.200 (+60m)
+  - vs pysteps_li:    +0.048 (+10m) → +0.199 (+60m)
+  - vs pysteps_ir:    +0.177 (+10m) → +0.315 (+60m)
+This is now a statistically robust, structurally consistent result, not
+just a point-estimate — the strongest form A1/A2 could take. n_boot=1000,
+sequence-level (not pixel-level) paired resampling.
+CI width scales with baseline reliability: model-vs-pysteps_ir has the
+widest CI (±0.025 @60min vs ±0.011 for persistence), consistent with
+pysteps_ir being the noisiest baseline (fits E3's physical story).
+**Figure:** this is the table/figure that should anchor the Results
+section — model PR-AUC with CI, alongside all three baselines with
+their deltas and significance markers. Likely a combined plot (PR-AUC
+vs lead, all four curves, shaded CI bands) rather than a bare table.
 
 ---
 
