@@ -32,12 +32,38 @@ logger = logging.getLogger(__name__)
 
 
 def _li_to_physical(arr, stats, ch="li"):
+    """NumPy version -- kept for reference / used nowhere hot anymore."""
     if ch not in stats:
         return arr
     x = arr * stats[ch]["std"] + stats[ch]["mean"]
     if stats[ch].get("transform") == "cbrt":
         x = np.power(np.clip(x, 0.0, None), 3)
     return np.clip(x, 0.0, 1.0)
+
+
+def _li_to_physical_torch(x: torch.Tensor, stats, ch: str = "li") -> torch.Tensor:
+    """
+    Pure-torch equivalent of _li_to_physical, staying entirely on-device.
+
+    PERFORMANCE-CRITICAL FIX: the original per-batch training loop did
+    tgt_abs[:, li_idx].detach().cpu().numpy() -> _li_to_physical (numpy)
+    -> torch.from_numpy(...).to(device), once EVERY BATCH. That .cpu()
+    call forces a hard CUDA synchronisation barrier -- the GPU pipeline
+    (which normally runs many batches ahead of the CPU) has to fully
+    drain before the transfer can happen, every single step. This is
+    exactly the kind of thing that turns a ~1.4M-parameter, attention-
+    free model (which should train fast) into something taking 1h/epoch.
+    model.py's actual training_loss has NO such round-trip anywhere --
+    confirms this was specific to this script, not an inherited cost.
+    Fix: do the identical arithmetic with torch ops on the GPU tensor
+    directly, no .cpu()/.numpy() at all.
+    """
+    if ch not in stats:
+        return x
+    out = x * stats[ch]["std"] + stats[ch]["mean"]
+    if stats[ch].get("transform") == "cbrt":
+        out = torch.clamp(out, min=0.0) ** 3
+    return torch.clamp(out, 0.0, 1.0)
 
 
 def parse_args():
@@ -138,10 +164,9 @@ def main():
             tgt_abs = target[torch.arange(B), lead_idx] + last_ctx   # (B, C, H, W)
 
             # Binary LI ground truth in PHYSICAL space (same threshold used
-            # throughout this project's evaluation scripts).
-            li_phys = torch.from_numpy(
-                _li_to_physical(tgt_abs[:, li_idx].detach().cpu().numpy(), stats)
-            ).to(device)
+            # throughout this project's evaluation scripts). Stays on GPU
+            # (no .cpu()/.numpy() round-trip -- see _li_to_physical_torch).
+            li_phys = _li_to_physical_torch(tgt_abs[:, li_idx], stats)
             li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)  # (B,1,H,W)
 
             logits = model(context, lead_idx)  # (B,1,H,W) RAW LOGITS
@@ -173,9 +198,7 @@ def main():
                 B, T_out_b = context.shape[0], target.shape[1]
                 lead_idx = torch.randint(0, T_out_b, (B,), device=device)
                 tgt_abs = target[torch.arange(B), lead_idx] + last_ctx
-                li_phys = torch.from_numpy(
-                    _li_to_physical(tgt_abs[:, li_idx].cpu().numpy(), stats)
-                ).to(device)
+                li_phys = _li_to_physical_torch(tgt_abs[:, li_idx], stats)
                 li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)
                 logits = model(context, lead_idx)
                 val_loss += F.binary_cross_entropy_with_logits(logits, li_bin).item()
