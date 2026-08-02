@@ -164,30 +164,41 @@ with a synthetic save/load test before trusting it.
 **Lesson for process, not for the paper:** worth doing one more such
 review pass before any other expensive/one-shot run in this project.
 
-### E1. Positional-vs-existence error decomposition at long lead time — CONFIRMED (on an earlier model; PENDING re-run on final model)
+### E1. Positional-vs-existence error decomposition at long lead time — PENDING (partial re-run on final model)
 At high confidence threshold, +60min error is POSITIONAL (skillful at
 36km neighbourhood tolerance). At low threshold, it's EXISTENCE (never
 skillful at any spatial scale). Two different failure modes requiring
 different fixes — this dual-regime framing is likely the paper's central
-mechanistic thesis. **TODO: re-run `diagnose_fss_scale.py` /
-`diagnose_prob_bins.py` on the FINAL 2-channel model** — current evidence
-is from an earlier model/dataset and needs revalidating before going in
-the paper as-is.
-**Figure:** FSS-vs-scale curves at multiple probability thresholds,
-likely a core results figure.
+mechanistic thesis.
+**Re-run status on the FINAL model:** ran at the default threshold
+(prob_thr=0.3) only so far — result: POSITIONAL, skillful at 12km, at
+EVERY lead 10-60min. This does NOT yet confirm or refute the dual-regime
+finding, since 0.3 is neither of the two thresholds (0.1 low / 0.5 high)
+that originally revealed the existence-vs-positional split. **Still
+need:** re-run at --prob_thr 0.1 and --prob_thr 0.5 specifically before
+citing E1 as re-confirmed on the final model.
 
-### E2. Displacement is incoherent, not advective — CONFIRMED, now corroborated TWO independent ways
+### E2. Displacement is incoherent, not advective — CONFIRMED, RE-VALIDATED on final model
 Custom `best_shift` analysis: optimal GLOBAL translation recovers almost
-nothing (+0.018–0.02 PR-AUC) — falsifies simple bulk-advection correction
-at convective scale. NOW INDEPENDENTLY CONFIRMED by a completely
-different, standard method: both optical-flow baselines (A2) underperform
-plain persistence, meaning even a smoothly-varying, locally-estimated
-motion field fails to capture whatever displacement structure exists.
+nothing. RE-RUN on the final 2-channel model confirms this holds:
++60min exact=0.524 -> best_shift=0.539 (+0.015 only) — same signature as
+originally found on the earlier model. Also independently corroborated
+by both optical-flow baselines underperforming persistence (see A2/E3).
+THREE independent checks now agree: custom best-shift analysis (original
+model), custom best-shift analysis (final model, this re-run), and
+standard optical-flow extrapolation (final model) all show no coherent
+motion field captures lightning displacement at convective scale.
 **This is likely the single most citable, defensible novel claim in the
-paper** — two independent methods agreeing that convective-scale
-lightning displacement isn't captured by any coherent motion field,
-directly contradicting the implicit assumption behind most classical
-nowcasting (optical flow / advection-based) approaches.
+paper.**
+**Methodological note for the manuscript:** `diagnose_positional_ceiling.py`
+runs on a 60-sequence subsample with its own ensemble settings, so its
+'exact' PR-AUC (0.524 @60min) is NOT the same number as the full-test-set
+bootstrap-CI'd PR-AUC (0.591 @60min, see B1) — expected, not a
+discrepancy to worry about, but the bootstrap number is the one to
+REPORT as the headline PR-AUC; this diagnostic's numbers are for
+internal structure (exact vs pooled vs best-shift) only. State this
+explicitly in methods so a careful reader doesn't find "two different
++60min PR-AUC numbers" and wonder which is authoritative.
 **Figure:** best_shift PR-AUC recovery curve + the four-way baseline
 comparison (A2) side by side — the paper's likely Figure 3 or 4.
 
