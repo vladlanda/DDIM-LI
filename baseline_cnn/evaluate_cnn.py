@@ -47,6 +47,8 @@ except ImportError:
 
 
 def _li_to_physical(arr, stats, ch="li"):
+    if ch not in stats:
+        return arr
     x = arr * stats[ch]["std"] + stats[ch]["mean"]
     if stats[ch].get("transform") == "cbrt":
         x = np.power(np.clip(x, 0.0, None), 3)
@@ -97,7 +99,8 @@ def main():
         channel_mults=tuple(ckpt_args["channel_mults"]),
         num_res_blocks=ckpt_args["num_res_blocks"],
         attn_resolutions=tuple(ckpt_args["attn_resolutions"]),
-        dropout=0.0, emb_dim=ckpt_args["emb_dim"], img_size=args.img_size[0],
+        dropout=0.0, emb_dim=ckpt_args["emb_dim"],
+        img_size=ckpt_args.get("img_size", args.img_size)[0],
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -129,7 +132,8 @@ def main():
 
             for t in range(T_out):
                 lead_idx = torch.full((B,), t, device=device, dtype=torch.long)
-                pred_prob = model(context, lead_idx)[:, 0].cpu().numpy()  # (B,H,W)
+                logits = model(context, lead_idx)  # (B,1,H,W) RAW LOGITS
+                pred_prob = torch.sigmoid(logits)[:, 0].cpu().numpy()  # (B,H,W) probability
 
                 tgt_abs_li = target[:, t, li_idx] + last_ctx[:, li_idx]
                 obs_phys = _li_to_physical(tgt_abs_li, stats)

@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 def _li_to_physical(arr, stats, ch="li"):
+    if ch not in stats:
+        return arr
     x = arr * stats[ch]["std"] + stats[ch]["mean"]
     if stats[ch].get("transform") == "cbrt":
         x = np.power(np.clip(x, 0.0, None), 3)
@@ -131,8 +133,13 @@ def main():
             ).to(device)
             li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)  # (B,1,H,W)
 
-            pred = model(context, lead_idx)  # (B,1,H,W) sigmoid probability
-            loss = F.binary_cross_entropy(pred, li_bin)
+            logits = model(context, lead_idx)  # (B,1,H,W) RAW LOGITS
+            # binary_cross_entropy_with_logits, NOT sigmoid()+binary_cross_entropy:
+            # the latter is numerically unstable at logit magnitudes reached
+            # routinely mid-training with this task's class imbalance -- verified
+            # empirically (see model_cnn.py docstring) that gradients can vanish
+            # to ~1e-10x correct, silently stalling learning without crashing.
+            loss = F.binary_cross_entropy_with_logits(logits, li_bin)
 
             opt.zero_grad()
             loss.backward()
@@ -159,8 +166,8 @@ def main():
                     _li_to_physical(tgt_abs[:, li_idx].cpu().numpy(), stats)
                 ).to(device)
                 li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)
-                pred = model(context, lead_idx)
-                val_loss += F.binary_cross_entropy(pred, li_bin).item()
+                logits = model(context, lead_idx)
+                val_loss += F.binary_cross_entropy_with_logits(logits, li_bin).item()
         val_loss /= max(len(val_loader), 1)
         logger.info(f"Epoch {epoch}: train_loss={avg_train:.4f}  val_loss={val_loss:.4f}")
 

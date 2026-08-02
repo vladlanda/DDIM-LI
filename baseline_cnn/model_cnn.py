@@ -32,11 +32,12 @@ What's stripped relative to the diffusion model's EDMPrecond wrapper:
     This is a deliberate methods choice for architectural consistency
     with our main model, worth stating explicitly in the manuscript.
 
-Output: single-channel LI-occurrence probability map (sigmoid), matching
-the literature convention (LightningCast, Metzl et al. BNN/AINN all frame
-this as binary segmentation, not multi-channel continuous regression).
-Trained with BCE loss against the same LI event threshold used everywhere
-else in this project.
+Output: single-channel LI-occurrence RAW LOGITS (not sigmoid), matching
+the literature convention of framing this as binary segmentation
+(LightningCast, Metzl et al. BNN/AINN), while keeping training numerically
+stable via BCE-with-logits (see DeterministicCNN.forward docstring for
+why sigmoid-then-BCE is unsafe). Callers needing a probability (evaluation,
+PR-AUC, calibration) apply torch.sigmoid() explicitly on the output.
 """
 import sys
 import os
@@ -88,7 +89,20 @@ class DeterministicCNN(nn.Module):
                   model's context tensor (includes the binary-LI-presence
                   channel per frame if binary_li_ctx=True).
         lead_idx: (B,) long tensor, 0-indexed lead step.
-        Returns:  (B, 1, H, W) sigmoid probability, NOT logits.
+        Returns:  (B, 1, H, W) RAW LOGITS (not sigmoid-transformed).
+
+        Deliberately returns logits, not probabilities: training must use
+        F.binary_cross_entropy_with_logits on the raw logits, not sigmoid()
+        followed by F.binary_cross_entropy. The latter is numerically
+        unstable -- verified empirically that at logit magnitudes entirely
+        plausible mid-training (this task's ~5-6% positive rate quickly
+        pushes the network toward confident negative predictions), the
+        gradient through sigmoid()+binary_cross_entropy can be ~1e-10x the
+        correct value, or exactly zero -- silent vanishing-gradient
+        paralysis on confidently-wrong examples, not a crash, which would
+        have been far harder to diagnose after a full training run than to
+        catch here. Callers needing an actual probability (evaluation,
+        PR-AUC, calibration) must apply torch.sigmoid() explicitly.
         """
         B, T_in, C_ctx, H, W = context.shape
         ctx_flat = context.reshape(B, T_in * C_ctx, H, W)
@@ -106,5 +120,4 @@ class DeterministicCNN(nn.Module):
         sigma = self._dummy_sigma_val.expand(B)
         lead_time = (lead_idx.float() + 1) * self.dt_min
 
-        logits = self.unet(net_input, sigma, lead_time, ch_mask)
-        return torch.sigmoid(logits)
+        return self.unet(net_input, sigma, lead_time, ch_mask)   # raw logits
