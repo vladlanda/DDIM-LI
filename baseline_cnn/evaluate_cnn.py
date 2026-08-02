@@ -60,6 +60,10 @@ def parse_args():
     p.add_argument("--config",     default=None)
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--test_roots", nargs="+", default=None)
+    p.add_argument("--packed_dirs", nargs="+", default=None,
+                   help="Output dirs from preprocess_to_memmap.py, one per "
+                        "test region, SAME ORDER as --test_roots. Uses the "
+                        "fast memmap loader instead of JPEG decoding if set.")
     p.add_argument("--output_dir", default="baseline_cnn")
     p.add_argument("--img_size",   nargs=2, type=int, default=[256, 256])
     p.add_argument("--batch_size", type=int, default=8)
@@ -106,13 +110,25 @@ def main():
     model.eval()
     logger.info(f"Loaded checkpoint from epoch {ckpt['epoch']}, val_loss={ckpt['val_loss']:.4f}")
 
-    test_loader = make_test_loader(
-        test_roots=args.test_roots, channel_list=channels, stats=stats,
-        T_in=T_in, T_out=T_out, img_size=tuple(args.img_size),
-        batch_size=args.batch_size, num_workers=args.num_workers,
-        binary_li_ctx=ckpt_args.get("binary_li_ctx", True),
-        ctx_channels=ckpt_args.get("ctx_channels"),
-    )
+    if args.packed_dirs is not None:
+        from dataset_packed import make_test_loader_packed
+        logger.info(f"Using PACKED data loading: {args.packed_dirs}")
+        test_loader = make_test_loader_packed(
+            test_packed_dirs=args.packed_dirs, channel_list=channels,
+            T_in=T_in, T_out=T_out, dt_min=dt_min,
+            batch_size=args.batch_size, num_workers=args.num_workers,
+            stats=stats, stats_roots=args.test_roots,
+            binary_li_ctx=ckpt_args.get("binary_li_ctx", True),
+            ctx_channels=ckpt_args.get("ctx_channels"),
+        )
+    else:
+        test_loader = make_test_loader(
+            test_roots=args.test_roots, channel_list=channels, stats=stats,
+            T_in=T_in, T_out=T_out, img_size=tuple(args.img_size),
+            batch_size=args.batch_size, num_workers=args.num_workers,
+            binary_li_ctx=ckpt_args.get("binary_li_ctx", True),
+            ctx_channels=ckpt_args.get("ctx_channels"),
+        )
     logger.info(f"Test sequences: {len(test_loader.dataset)}")
 
     lead_times = [(t + 1) * dt_min for t in range(T_out)]
