@@ -89,12 +89,21 @@ with margin growing from +4.6% to +50.9%.
 ## Phase 3 — Strengthen for top-of-range venues (npj / TGRS)
 
 - [x] Deterministic CNN baseline — IMPLEMENTED (`baseline_cnn/`), ready
-      to train. Reuses model.py's UNet blocks directly for architectural
-      fairness; single-channel sigmoid LI-probability output; amortized
-      across lead times via the same lead-time conditioning as the main
-      model. Output schema matches the other baselines for bootstrap-CI
-      comparability. Verified end-to-end (architecture shapes/gradients,
-      full train+eval smoke test through the real CLI/config path).
+      to train. LIGHTWEIGHT config (~1.45M params, matching Metzl et al.
+      2025's ~1.6M BNN scale — not the diffusion model's full ~22M-param
+      capacity, which was the initial version but too expensive to train
+      and not actually a faithful literature reproduction anyway):
+      base_channels=24, channel_mults=[1,2,2,4], no attention, emb_dim=64.
+      Reuses model.py's UNet class purely via hyperparameters (no new
+      architecture code). Single-channel logit output, amortized across
+      lead times via the same lead-time conditioning as the main model.
+      Output schema matches the other baselines for bootstrap-CI
+      comparability. Verified end-to-end at full 256x256 resolution and
+      through the real CLI/config default path (not just hand-built args).
+      A real numerical-stability bug (sigmoid+BCE instead of BCE-with-
+      logits, verified empirically to cause ~1e-10x vanishing gradients
+      at plausible mid-training logit magnitudes) was caught and fixed
+      during a dedicated pre-training review pass — see commit history.
       **Owner: user — train, then evaluate:**
       ```
       python baseline_cnn/train_cnn.py --config configs/default.yaml \
@@ -109,10 +118,9 @@ with margin growing from +4.6% to +50.9%.
           --baseline cnn:baseline_cnn/baseline_cnn_pr_curves.npz \
           --label model --dt_min 10 --n_boot 1000
       ```
-      Epoch count is a starting suggestion, not tuned — this is a much
-      cheaper model per-step than the diffusion model (no ensemble
-      sampling), so a training-curve check is worthwhile once you have
-      one run to look at.
+      Much cheaper per-step than before (~15x fewer params, no attention)
+      — should train considerably faster than the original full-scale
+      attempt. Epoch count still a starting suggestion, not tuned.
 
 - [ ] LightGBM baseline (`baseline_lightgbm/`) — NOT YET STARTED. Scope
       decision made: LightGBM only (not also XGBoost — both are gradient-
