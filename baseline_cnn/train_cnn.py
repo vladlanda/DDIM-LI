@@ -70,6 +70,14 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True)
     p.add_argument("--train_roots", nargs="+", default=None)
+    p.add_argument("--packed_dirs", nargs="+", default=None,
+                   help="Output dirs from preprocess_to_memmap.py, one per "
+                        "region, SAME ORDER as --train_roots. If given, uses "
+                        "the fast memmap loader instead of JPEG decoding -- "
+                        "profiling showed JPEG decoding/file-open overhead "
+                        "dominates training time (data loading >> model "
+                        "compute), independent of model size. --train_roots "
+                        "is still required when using this (for stats).")
     p.add_argument("--channels", nargs="+", default=None)
     p.add_argument("--T_in", type=int, default=None)
     p.add_argument("--T_out", type=int, default=None)
@@ -124,13 +132,25 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    train_loader, val_loader, stats = make_dataloaders(
-        train_roots=args.train_roots, channel_list=args.channels,
-        T_in=args.T_in, T_out=args.T_out, img_size=tuple(args.img_size),
-        batch_size=args.batch_size, num_workers=args.num_workers,
-        train_val_split=args.train_val_split,
-        binary_li_ctx=args.binary_li_ctx, ctx_channels=args.ctx_channels,
-    )
+    if args.packed_dirs is not None:
+        from dataset_packed import make_dataloaders_packed
+        logger.info(f"Using PACKED data loading: {args.packed_dirs}")
+        train_loader, val_loader, stats = make_dataloaders_packed(
+            train_packed_dirs=args.packed_dirs, channel_list=args.channels,
+            T_in=args.T_in, T_out=args.T_out, dt_min=args.dt_min,
+            batch_size=args.batch_size, num_workers=args.num_workers,
+            stats_roots=args.train_roots,   # original JPEG roots, for stats
+            train_val_split=args.train_val_split,
+            binary_li_ctx=args.binary_li_ctx, ctx_channels=args.ctx_channels,
+        )
+    else:
+        train_loader, val_loader, stats = make_dataloaders(
+            train_roots=args.train_roots, channel_list=args.channels,
+            T_in=args.T_in, T_out=args.T_out, img_size=tuple(args.img_size),
+            batch_size=args.batch_size, num_workers=args.num_workers,
+            train_val_split=args.train_val_split,
+            binary_li_ctx=args.binary_li_ctx, ctx_channels=args.ctx_channels,
+        )
     channels = args.channels
     li_idx = channels.index("li")
     C = len(channels)
