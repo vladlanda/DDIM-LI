@@ -71,11 +71,22 @@ def parse_args():
             setattr(args, k, v)
     # Sensible fallbacks matching the diffusion model's architecture where
     # not overridden by config, so the CNN gets comparable capacity.
-    args.base_channels     = args.base_channels or 64
-    args.channel_mults     = tuple(args.channel_mults or [1, 2, 3, 4])
-    args.num_res_blocks    = args.num_res_blocks or 2
-    args.attn_resolutions  = tuple(args.attn_resolutions or [64, 32])
-    args.emb_dim           = args.emb_dim or 256
+    # Lightweight, literature-matched config (~1.4M params), NOT the
+    # diffusion model's full-scale architecture. Chosen after benchmarking
+    # against Metzl et al. 2025's reported ~1.6M-parameter BNN baseline and
+    # LightningCast's operational-inference-oriented sizing: same NUMBER of
+    # resolution levels (4) as our main model for structural consistency,
+    # but far narrower channels and NO attention (attn_resolutions=())
+    # -- both LightningCast and Metzl et al.'s BNN/AINN are plain
+    # convolutional U-Nets, no attention. This is ~15x smaller than the
+    # diffusion-model-scale config used in earlier smoke tests, and trains
+    # far faster (no ensemble sampling either way, but far fewer FLOPs per
+    # forward pass too).
+    args.base_channels     = args.base_channels or 24
+    args.channel_mults     = tuple(args.channel_mults or [1, 2, 2, 4])
+    args.num_res_blocks    = args.num_res_blocks or 1
+    args.attn_resolutions  = tuple(args.attn_resolutions if args.attn_resolutions is not None else [])
+    args.emb_dim           = args.emb_dim or 64
     args.binary_li_ctx     = True if args.binary_li_ctx is None else args.binary_li_ctx
     args.train_val_split   = args.train_val_split or 0.8
     args.batch_size        = args.batch_size or 16

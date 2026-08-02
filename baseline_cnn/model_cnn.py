@@ -8,12 +8,20 @@ broader satellite-lightning-CNN subfield) shows a plain deterministic CNN
 is the standard baseline alongside persistence/optical-flow -- our
 baseline set was missing it. This is that baseline.
 
-Deliberately REUSES model.py's UNet class (same encoder/decoder/attention
-blocks as the diffusion model) rather than writing a new architecture from
-scratch. This isolates the comparison to "generative diffusion process vs.
-single deterministic forward pass", not "well-engineered architecture vs.
-a hastily-built one" -- a legitimate concern reviewers have about baseline
-fairness.
+Architecture scale: DELIBERATELY LIGHTWEIGHT, matching the literature's
+actual baseline scale rather than reusing the diffusion model's full
+capacity. Benchmarked against Metzl et al. 2025's reported ~1.6M-parameter
+BNN and LightningCast's operational-inference sizing: the recommended
+config (base_channels=24, channel_mults=[1,2,2,4], num_res_blocks=1,
+attn_resolutions=[], emb_dim=64) lands at ~1.4M parameters -- same NUMBER
+of resolution levels (4) as our main model for structural consistency,
+but ~15x fewer parameters and no attention (neither LightningCast nor
+Metzl et al.'s BNN/AINN use attention). This is a genuine, faithful-scale
+reproduction of the field's standard baseline, not a stripped-down copy
+of our own model -- and trains far faster as a direct consequence.
+Still reuses model.py's UNet class (see below) for the same fairness
+argument, just called with literature-appropriate hyperparameters instead
+of the diffusion model's own.
 
 What's stripped relative to the diffusion model's EDMPrecond wrapper:
   - No noisy-residual input (nothing to denoise -- this predicts directly).
