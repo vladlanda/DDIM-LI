@@ -71,11 +71,13 @@ with margin growing from +4.6% to +50.9%.
 - [x] Sequence-level bootstrap CIs — DONE. All 18 comparisons (3 baselines
       × 6 leads) significant, margin grows monotonically with lead time
       against all three baselines. See FINDINGS.md B1 for the numbers.
-- [ ] Re-run FSS-threshold + positional-ceiling error decomposition on
-      the FINAL model (currently only validated on an older model/data).
-      Existing diagnostic scripts (diagnose_fss_scale.py,
-      diagnose_positional_ceiling.py) — just need a fresh run.
-      **Owner: user (run) + me (interpret).**
+- [x] Re-run FSS-threshold + positional-ceiling error decomposition on
+      the FINAL model — DONE. best_shift confirmed the incoherent-
+      displacement finding (E2). FSS at prob_thr 0.1/0.5 confirmed and
+      refined the dual-regime finding (E1): high-confidence predictions
+      are positionally accurate at every lead; low-confidence predictions
+      show a graduated transition into existence-dominated failure by
+      +50/+60min. See FINDINGS.md E1/E2 for full detail.
 
 ## Phase 3 — Strengthen for top-of-range venues (npj / TGRS)
 

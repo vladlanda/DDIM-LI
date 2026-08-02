@@ -164,19 +164,26 @@ with a synthetic save/load test before trusting it.
 **Lesson for process, not for the paper:** worth doing one more such
 review pass before any other expensive/one-shot run in this project.
 
-### E1. Positional-vs-existence error decomposition at long lead time — PENDING (partial re-run on final model)
-At high confidence threshold, +60min error is POSITIONAL (skillful at
-36km neighbourhood tolerance). At low threshold, it's EXISTENCE (never
-skillful at any spatial scale). Two different failure modes requiring
-different fixes — this dual-regime framing is likely the paper's central
-mechanistic thesis.
-**Re-run status on the FINAL model:** ran at the default threshold
-(prob_thr=0.3) only so far — result: POSITIONAL, skillful at 12km, at
-EVERY lead 10-60min. This does NOT yet confirm or refute the dual-regime
-finding, since 0.3 is neither of the two thresholds (0.1 low / 0.5 high)
-that originally revealed the existence-vs-positional split. **Still
-need:** re-run at --prob_thr 0.1 and --prob_thr 0.5 specifically before
-citing E1 as re-confirmed on the final model.
+### E1. Positional-vs-existence error decomposition at long lead time — CONFIRMED on final model, refined
+Re-run on the final 2-channel model at both threshold extremes:
+  - **prob_thr=0.5 (high confidence):** POSITIONAL at every lead 10-60min,
+    skillful at just 12-20km throughout. The model's confident predictions
+    are always spatially close to correct, at every lead time tested.
+  - **prob_thr=0.1 (low confidence):** a clean, GRADUATED transition with
+    lead time — POSITIONAL (+10/+20min) -> MIXED (+30/+40min) ->
+    **EXISTENCE, never reaches skill at any scale (+50/+60min)**.
+This is a sharper, more mechanistic version of the original finding: not
+a binary "some leads are one type, some the other," but existence
+uncertainty visibly GROWING IN and eventually dominating as lead time
+increases, specifically in the low-confidence tail of the prediction.
+The model's confident core stays positionally accurate throughout; it's
+the uncertain/weak-signal predictions that degrade into pure existence
+failure at long lead. **This graduated-onset framing is likely the
+paper's central mechanistic thesis, stronger than the original two-
+threshold framing.**
+**Figure:** FSS-vs-scale curves at both thresholds, side by side, with
+the skillful-scale-vs-lead-time trend annotated to show the graduated
+transition — likely a core Results figure, possibly THE central one.
 
 ### E2. Displacement is incoherent, not advective — CONFIRMED, RE-VALIDATED on final model
 Custom `best_shift` analysis: optimal GLOBAL translation recovers almost
