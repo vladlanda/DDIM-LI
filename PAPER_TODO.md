@@ -88,23 +88,50 @@ with margin growing from +4.6% to +50.9%.
 
 ## Phase 3 — Strengthen for top-of-range venues (npj / TGRS)
 
-- [ ] **NEW, higher priority: deterministic CNN baseline.** Literature
-      check (see FINDINGS.md F3 — Metzl et al. 2025, the closest
-      comparator paper found) shows the realistic convention in this
-      specific subfield always includes a trained deep-learning baseline
-      (a plain CNN, no advection/diffusion) alongside physical baselines
-      — not persistence + optical-flow alone. LightningCast itself has
-      also become a de facto reference point for later papers in this
-      space. Concrete, scoped plan: reuse our existing UNet architecture
-      (drop the diffusion machinery, single deterministic forward pass,
-      plain BCE or regression loss, one model amortized across lead
-      times via the existing lead-time conditioning — no need to retrain
-      per-lead-time as Metzl et al. do). This is real training time, not
-      a free re-run, but is the single highest-value addition to the
-      baseline set for a reviewer at our target venues.
-      **Owner: me (design + implement) + user (train + run).**
-- [ ] Loss-term ablation, scoped down (full loss vs. denoising-only,
-      not a full factorial grid). **Owner: user (run) + me (design).**
+- [x] Deterministic CNN baseline — IMPLEMENTED (`baseline_cnn/`), ready
+      to train. Reuses model.py's UNet blocks directly for architectural
+      fairness; single-channel sigmoid LI-probability output; amortized
+      across lead times via the same lead-time conditioning as the main
+      model. Output schema matches the other baselines for bootstrap-CI
+      comparability. Verified end-to-end (architecture shapes/gradients,
+      full train+eval smoke test through the real CLI/config path).
+      **Owner: user — train, then evaluate:**
+      ```
+      python baseline_cnn/train_cnn.py --config configs/default.yaml \
+          --epochs 150 --output_dir baseline_cnn/outputs/run1
+
+      python baseline_cnn/evaluate_cnn.py --config configs/evaluate.yaml \
+          --checkpoint baseline_cnn/outputs/run1/best.pt \
+          --output_dir baseline_cnn
+
+      python bootstrap_pr_auc_ci.py \
+          --npz outputs/nature_256_T36_ir_li_only/eval/plot_data.npz \
+          --baseline cnn:baseline_cnn/baseline_cnn_pr_curves.npz \
+          --label model --dt_min 10 --n_boot 1000
+      ```
+      Epoch count is a starting suggestion, not tuned — this is a much
+      cheaper model per-step than the diffusion model (no ensemble
+      sampling), so a training-curve check is worthwhile once you have
+      one run to look at.
+
+- [ ] LightGBM baseline (`baseline_lightgbm/`) — NOT YET STARTED. Scope
+      decision made: LightGBM only (not also XGBoost — both are gradient-
+      boosted trees, building both adds tuning burden without additional
+      scientific insight). Trained/evaluated AT OUR OWN task resolution
+      (4km/10min, pixel-exact), NOT a literal reproduction of Song et
+      al.'s 0.25°/hourly protocol (that would reopen the base-rate/
+      resolution non-comparability problem already flagged in F1).
+      Framing: "a gradient-boosted-tree baseline in the methodological
+      spirit of the most relevant prior npj publication, evaluated on
+      our task" — legitimate and citable without overclaiming a direct
+      number-to-number comparison with their 0.727.
+      **Owner: me next.**
+
+- [ ] Loss-term ablation, scoped down (full loss vs. denoising-only, not
+      a full factorial grid). Lower priority than the CNN/LightGBM
+      baselines above — those close real reviewer-expectation gaps;
+      this strengthens an already-solid methods section further.
+      **Owner: user (run) + me (design).**
 - [ ] Generalization check: held-out region (train on 3 of 4 regions,
       test on the 4th). **Owner: user (run) + me (design the split).**
 
