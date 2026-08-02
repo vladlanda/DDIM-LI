@@ -261,6 +261,34 @@ Discussion/Related Work — our finding is independently consistent with
 theirs despite different platforms, using a considerably more rigorous
 methodology (pre-registered, bootstrap-CI'd vs. their ad-hoc ablation).
 
+### F3. Metzl et al. 2025 (DLR/DWD, in review) — closest comparator paper found, changes Phase 3 priorities
+Near-identical study: satellite (MSG/SEVIRI) + lightning (LINET), CNN
+(ResU-Net) segmentation over the Alps region. Directly relevant findings:
+  - They advect lightning using a DENSER companion channel (water vapor)
+    because "optical flow struggles with sparse fields" — same choice we
+    made (pysteps_ir), but they never tested the direct-lightning-flow
+    alternative. We tested both and found the denser-channel variant
+    performs WORSE (E3) — a genuine point of novelty against this
+    specific, recent, closely-related paper.
+  - Their baseline set: physical extrapolation (LPNL, ≈ our pysteps_li)
+    is dramatically weaker than either of their CNN variants (CSI 0.191
+    vs 0.343) — consistent with our own pattern (optical flow barely
+    matches persistence, model far exceeds both).
+  - Their "scale argument": advection only helps once receptive_field ≲
+    wind_speed×lead_time; empirically the crossover is >2h lead time.
+    Below that, their advection-informed CNN barely beats their plain
+    CNN. OUR ENTIRE HORIZON (60min) IS BELOW THIS THRESHOLD — gives an
+    independently-derived, citable physical explanation for why optical
+    flow underperforms in our results, not just an empirical observation.
+**Action for paper:** cite this directly, possibly apply their scale-
+argument formula to our architecture's receptive field and regional wind
+speeds as a quantitative cross-check.
+**Action for Phase 3:** their (and the broader subfield's, e.g.
+LightningCast/BNN) convention of ALWAYS including a deterministic CNN
+baseline alongside physical baselines is a real gap in our current
+baseline set (persistence + 2 optical-flow variants, no trained CNN).
+See PAPER_TODO.md Phase 3 for the concrete plan.
+
 ---
 
 ## G. Open items that would strengthen the paper if resolved (cross-ref PAPER_TODO.md)

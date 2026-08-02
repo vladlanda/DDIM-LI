@@ -5,7 +5,14 @@ inline as items complete. See conversation history for full rationale
 behind each item.
 
 **Target venues:** npj Climate and Atmospheric Science (primary), IEEE TGRS
-(parallel), Atmospheric Research (fallback).
+(parallel), Atmospheric Research (fallback). Cross-checked against a
+predatory/low-quality publisher blocklist — all three clean. Note two
+near-miss confusions to avoid: IEEE Access (flagged, pay-to-publish
+mega-journal) is NOT IEEE TGRS (our recommendation, established subject
+journal, different venue despite shared publisher); Scientific Reports
+(flagged, Nature's no-novelty-bar mega-journal) is NOT npj Climate and
+Atmospheric Science (our recommendation, curated Nature Portfolio
+subject journal — where Song et al. 2023 was published).
 
 **Current best model:** `outputs/nature_256_T36_ir_li_only` — 2-channel
 (ir105 + li), 790 epochs, trained on the regenerated (clean) dataset.
@@ -81,6 +88,21 @@ with margin growing from +4.6% to +50.9%.
 
 ## Phase 3 — Strengthen for top-of-range venues (npj / TGRS)
 
+- [ ] **NEW, higher priority: deterministic CNN baseline.** Literature
+      check (see FINDINGS.md F3 — Metzl et al. 2025, the closest
+      comparator paper found) shows the realistic convention in this
+      specific subfield always includes a trained deep-learning baseline
+      (a plain CNN, no advection/diffusion) alongside physical baselines
+      — not persistence + optical-flow alone. LightningCast itself has
+      also become a de facto reference point for later papers in this
+      space. Concrete, scoped plan: reuse our existing UNet architecture
+      (drop the diffusion machinery, single deterministic forward pass,
+      plain BCE or regression loss, one model amortized across lead
+      times via the existing lead-time conditioning — no need to retrain
+      per-lead-time as Metzl et al. do). This is real training time, not
+      a free re-run, but is the single highest-value addition to the
+      baseline set for a reviewer at our target venues.
+      **Owner: me (design + implement) + user (train + run).**
 - [ ] Loss-term ablation, scoped down (full loss vs. denoising-only,
       not a full factorial grid). **Owner: user (run) + me (design).**
 - [ ] Generalization check: held-out region (train on 3 of 4 regions,
