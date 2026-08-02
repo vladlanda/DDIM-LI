@@ -118,9 +118,36 @@ with margin growing from +4.6% to +50.9%.
           --baseline cnn:baseline_cnn/baseline_cnn_pr_curves.npz \
           --label model --dt_min 10 --n_boot 1000
       ```
-      Much cheaper per-step than before (~15x fewer params, no attention)
-      — should train considerably faster than the original full-scale
-      attempt. Epoch count still a starting suggestion, not tuned.
+- [x] **Fundamental data-loading speedup: memmap-packed data pipeline.**
+      Profiling traced 1h/epoch to per-file JPEG-open/decode overhead
+      (~84 individual files per training sample), not model compute or
+      raw disk bandwidth — confirmed by num_workers tuning plateauing
+      (best 29.4 min/epoch at 6-8 workers) and regressing at 16 (I/O
+      contention signature). Built `preprocess_to_memmap.py` (one-time,
+      per-region) + `dataset_packed.py` as a fully separate path from
+      `dataset.py` — zero risk to the existing, validated pipeline.
+      Rigorously validated: field-by-field output comparison across all
+      sequences of a synthetic test (including a genuinely-missing
+      optional channel, to exercise the fill-value/normalization-skip
+      edge case) shows zero mismatches; full `make_dataloaders` vs
+      `make_dataloaders_packed` pipeline comparison shows identical
+      train/val splits and EXACTLY matching density-based oversampling
+      thresholds. ~4x faster even on a tiny synthetic test; real data
+      (T_in=36, far more files eliminated per sample) should show more.
+      **This is general infrastructure, not baseline_cnn-specific** — the
+      same approach would speed up the main diffusion model's training
+      too, if adopted there later.
+      **Owner: user — preprocess once per region, then train:**
+      ```
+      python preprocess_to_memmap.py --root <region_path> \
+          --channels ir li --img_size 256 256
+
+      python baseline_cnn/train_cnn.py --config configs/default.yaml \
+          --train_roots <region1> <region2> <region3> <region4> \
+          --packed_dirs <region1>/_packed <region2>/_packed \
+                        <region3>/_packed <region4>/_packed \
+          --epochs 150 --output_dir baseline_cnn/outputs/run1
+      ```
 
 - [ ] LightGBM baseline (`baseline_lightgbm/`) — NOT YET STARTED. Scope
       decision made: LightGBM only (not also XGBoost — both are gradient-
