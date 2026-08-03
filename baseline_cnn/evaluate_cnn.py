@@ -61,9 +61,13 @@ def parse_args():
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--test_roots", nargs="+", default=None)
     p.add_argument("--packed_dirs", nargs="+", default=None,
-                   help="Output dirs from preprocess_to_memmap.py, one per "
-                        "test region, SAME ORDER as --test_roots. Uses the "
-                        "fast memmap loader instead of JPEG decoding if set.")
+                   help="Explicit override: output dirs from "
+                        "preprocess_to_memmap.py, one per test region, SAME "
+                        "ORDER as --test_roots. Usually you want "
+                        "--use_packed instead.")
+    p.add_argument("--use_packed", action="store_true", default=False,
+                   help="Auto-derive --packed_dirs as <root>/_packed for "
+                        "every entry in --test_roots.")
     p.add_argument("--output_dir", default="baseline_cnn")
     p.add_argument("--img_size",   nargs=2, type=int, default=[256, 256])
     p.add_argument("--batch_size", type=int, default=8)
@@ -79,6 +83,18 @@ def parse_args():
                 setattr(args, k, v)
     if args.test_roots is None:
         p.error("--test_roots is required (set in CLI or --config)")
+    if args.use_packed:
+        if args.packed_dirs is not None:
+            raise ValueError("Pass either --use_packed or an explicit "
+                             "--packed_dirs, not both.")
+        args.packed_dirs = [os.path.join(r, "_packed") for r in args.test_roots]
+        missing = [d for d in args.packed_dirs if not os.path.isdir(d)]
+        if missing:
+            raise FileNotFoundError(
+                f"--use_packed derived {missing} but they don't exist. "
+                f"Run preprocess_to_memmap.py --root <region> for each of "
+                f"--test_roots first."
+            )
     return args
 
 

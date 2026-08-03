@@ -71,13 +71,17 @@ def parse_args():
     p.add_argument("--config", required=True)
     p.add_argument("--train_roots", nargs="+", default=None)
     p.add_argument("--packed_dirs", nargs="+", default=None,
-                   help="Output dirs from preprocess_to_memmap.py, one per "
-                        "region, SAME ORDER as --train_roots. If given, uses "
-                        "the fast memmap loader instead of JPEG decoding -- "
-                        "profiling showed JPEG decoding/file-open overhead "
-                        "dominates training time (data loading >> model "
-                        "compute), independent of model size. --train_roots "
-                        "is still required when using this (for stats).")
+                   help="Explicit override: output dirs from "
+                        "preprocess_to_memmap.py, one per region, SAME "
+                        "ORDER as --train_roots. Usually you want "
+                        "--use_packed instead (auto-derives <root>/_packed "
+                        "for each entry in --train_roots).")
+    p.add_argument("--use_packed", action="store_true", default=False,
+                   help="Auto-derive --packed_dirs as <root>/_packed for "
+                        "every entry in --train_roots (the default output "
+                        "location from preprocess_to_memmap.py). Avoids "
+                        "manually typing out a second, parallel list that "
+                        "could silently drift out of sync with --train_roots.")
     p.add_argument("--channels", nargs="+", default=None)
     p.add_argument("--T_in", type=int, default=None)
     p.add_argument("--T_out", type=int, default=None)
@@ -124,6 +128,23 @@ def parse_args():
     args.binary_li_ctx     = True if args.binary_li_ctx is None else args.binary_li_ctx
     args.train_val_split   = args.train_val_split or 0.8
     args.batch_size        = args.batch_size or 16
+
+    if args.use_packed:
+        if args.packed_dirs is not None:
+            raise ValueError("Pass either --use_packed or an explicit "
+                             "--packed_dirs, not both.")
+        if args.train_roots is None:
+            raise ValueError("--use_packed requires --train_roots to be set "
+                             "(from CLI or --config) so packed dirs can be "
+                             "derived from it.")
+        args.packed_dirs = [os.path.join(r, "_packed") for r in args.train_roots]
+        missing = [d for d in args.packed_dirs if not os.path.isdir(d)]
+        if missing:
+            raise FileNotFoundError(
+                f"--use_packed derived {missing} but they don't exist. "
+                f"Run preprocess_to_memmap.py --root <region> for each of "
+                f"--train_roots first."
+            )
     return args
 
 

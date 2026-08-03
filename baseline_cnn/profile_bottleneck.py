@@ -36,14 +36,29 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--packed_dirs", nargs="+", default=None,
-                   help="If given, profiles the PACKED memmap loader "
-                        "instead of the JPEG loader (same order as "
-                        "train_roots in the config).")
+                   help="Explicit override: if given, profiles the PACKED "
+                        "memmap loader instead of the JPEG loader (same "
+                        "order as train_roots in the config). Usually you "
+                        "want --use_packed instead.")
+    p.add_argument("--use_packed", action="store_true", default=False,
+                   help="Auto-derive --packed_dirs as <root>/_packed for "
+                        "every entry in the config's train_roots.")
     args = p.parse_args()
     cfg = load_yaml(args.config)
     for k, v in cfg.items():
         if hasattr(args, k) and getattr(args, k) is None:
             setattr(args, k, v)
+    if args.use_packed:
+        if args.packed_dirs is not None:
+            raise ValueError("Pass either --use_packed or an explicit "
+                             "--packed_dirs, not both.")
+        args.packed_dirs = [os.path.join(r, "_packed") for r in cfg["train_roots"]]
+        missing = [d for d in args.packed_dirs if not os.path.isdir(d)]
+        if missing:
+            raise FileNotFoundError(
+                f"--use_packed derived {missing} but they don't exist. "
+                f"Run preprocess_to_memmap.py --root <region> first."
+            )
     return args, cfg
 
 
