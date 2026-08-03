@@ -196,9 +196,13 @@ def main():
         total_loss = 0.0
         step_bar = tqdm(train_loader, desc=f"Epoch {epoch}", dynamic_ncols=True)
         for batch in step_bar:
-            context  = batch["context"].to(device)
-            target   = batch["target"].to(device)      # (B, T_out, C, H, W) residuals
-            last_ctx = batch["last_ctx"].to(device)     # (B, C, H, W)
+            # non_blocking=True + pin_memory=True (already set on the
+            # DataLoader) lets the CPU->GPU transfer overlap with the GPU
+            # still finishing the PREVIOUS step's compute, instead of the
+            # transfer blocking the training loop.
+            context  = batch["context"].to(device, non_blocking=True)
+            target   = batch["target"].to(device, non_blocking=True)      # (B, T_out, C, H, W) residuals
+            last_ctx = batch["last_ctx"].to(device, non_blocking=True)     # (B, C, H, W)
             B, T_out_b = context.shape[0], target.shape[1]
 
             lead_idx = torch.randint(0, T_out_b, (B,), device=device)
@@ -233,9 +237,9 @@ def main():
         val_loss = 0.0
         with torch.no_grad():
             for batch in val_loader:
-                context  = batch["context"].to(device)
-                target   = batch["target"].to(device)
-                last_ctx = batch["last_ctx"].to(device)
+                context  = batch["context"].to(device, non_blocking=True)
+                target   = batch["target"].to(device, non_blocking=True)
+                last_ctx = batch["last_ctx"].to(device, non_blocking=True)
                 B, T_out_b = context.shape[0], target.shape[1]
                 lead_idx = torch.randint(0, T_out_b, (B,), device=device)
                 tgt_abs = target[torch.arange(B), lead_idx] + last_ctx

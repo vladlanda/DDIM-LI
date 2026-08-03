@@ -361,11 +361,19 @@ def make_dataloaders_packed(
         weights=torch.from_numpy(all_weights).double(),
         num_samples=len(train_combined), replacement=True,
     )
+    # persistent_workers=True: without this, DataLoader tears down and
+    # RESPAWNS all worker processes at the start of EVERY epoch (PyTorch's
+    # default). Only valid when num_workers>0. This cost was never visible
+    # to profile_bottleneck.py, which only ever does one continuous
+    # iter(train_loader) within a single epoch -- it structurally cannot
+    # see a per-epoch respawn tax, since it never crosses an epoch boundary.
     train_loader = DataLoader(train_combined, batch_size=batch_size,
                               sampler=train_sampler, num_workers=num_workers,
-                              pin_memory=True, drop_last=True)
+                              pin_memory=True, drop_last=True,
+                              persistent_workers=(num_workers > 0))
     val_loader = DataLoader(val_combined, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True)
+                            num_workers=num_workers, pin_memory=True,
+                            persistent_workers=(num_workers > 0))
     return train_loader, val_loader, shared_stats
 
 
@@ -408,4 +416,5 @@ def make_test_loader_packed(
     if len(combined) == 0:
         raise RuntimeError("No valid sequences found in any packed test region")
     return DataLoader(combined, batch_size=batch_size, shuffle=False,
-                      num_workers=num_workers, pin_memory=True)
+                      num_workers=num_workers, pin_memory=True,
+                      persistent_workers=(num_workers > 0))

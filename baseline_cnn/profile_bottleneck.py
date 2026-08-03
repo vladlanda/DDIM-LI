@@ -99,6 +99,63 @@ def main():
         )
     channels = cfg["channels"]; C = len(channels)
 
+    # ---- Stage 0: epoch-boundary worker respawn cost ----
+    # The stages below only ever do ONE continuous iter(loader) -- they
+    # structurally cannot see a per-epoch worker-respawn cost, since they
+    # never cross an epoch boundary. Without persistent_workers=True,
+    # PyTorch's default tears down and RESPAWNS all worker processes at
+    # the start of EVERY epoch. This tests that directly: time-to-first-
+    # batch across several simulated "epoch starts" (fresh iter() calls
+    # on the same loader), with and without persistent_workers.
+    if num_workers > 0:
+        print(f"\n--- Stage 0: epoch-boundary respawn cost (num_workers={num_workers}) ---")
+        for persistent in [False, True]:
+            if args.packed_dirs is not None:
+                from dataset_packed import make_dataloaders_packed
+                test_loader, _, _ = make_dataloaders_packed(
+                    train_packed_dirs=args.packed_dirs, channel_list=cfg["channels"],
+                    T_in=cfg["T_in"], T_out=cfg["T_out"], dt_min=cfg["dt_min"],
+                    batch_size=batch_size, num_workers=num_workers,
+                    stats_roots=cfg["train_roots"],
+                    train_val_split=cfg.get("train_val_split", 0.8),
+                    binary_li_ctx=cfg.get("binary_li_ctx", True),
+                    ctx_channels=cfg.get("ctx_channels"),
+                )
+                # override persistent_workers for this specific test
+                test_loader = torch.utils.data.DataLoader(
+                    test_loader.dataset, batch_size=batch_size,
+                    sampler=test_loader.sampler, num_workers=num_workers,
+                    pin_memory=True, drop_last=True, persistent_workers=persistent)
+            else:
+                test_loader, _, _ = make_dataloaders(
+                    train_roots=cfg["train_roots"], channel_list=cfg["channels"],
+                    T_in=cfg["T_in"], T_out=cfg["T_out"], img_size=tuple(cfg["img_size"]),
+                    batch_size=batch_size, num_workers=num_workers,
+                    train_val_split=cfg.get("train_val_split", 0.8),
+                    binary_li_ctx=cfg.get("binary_li_ctx", True),
+                    ctx_channels=cfg.get("ctx_channels"),
+                )
+                test_loader = torch.utils.data.DataLoader(
+                    test_loader.dataset, batch_size=batch_size,
+                    sampler=test_loader.sampler, num_workers=num_workers,
+                    pin_memory=True, drop_last=True, persistent_workers=persistent)
+
+            first_batch_times = []
+            for epoch_sim in range(3):
+                it = iter(test_loader)
+                t0 = time.time()
+                _ = next(it)
+                first_batch_times.append(time.time() - t0)
+                del it   # drop the iterator -- if NOT persistent_workers,
+                         # this is when PyTorch tears the workers down
+            label = "persistent_workers=True " if persistent else "persistent_workers=False"
+            print(f"  {label}: time-to-first-batch per simulated epoch start = "
+                  f"{[f'{t*1000:.0f}ms' for t in first_batch_times]}")
+        print(f"  If persistent_workers=False shows a similarly LARGE cost at every")
+        print(f"  epoch start (not just the first), while persistent_workers=True")
+        print(f"  shows a large cost only ONCE, that confirms worker-respawn overhead")
+        print(f"  was a real, recurring, previously-invisible cost.")
+
     # ---- Stage 1: pure data loading ----
     it = iter(train_loader)
     t0 = time.time()

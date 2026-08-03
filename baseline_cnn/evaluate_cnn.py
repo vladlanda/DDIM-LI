@@ -157,7 +157,7 @@ def main():
 
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="CNN baseline eval", dynamic_ncols=True):
-            context  = batch["context"].to(device)
+            context  = batch["context"].to(device, non_blocking=True)
             target   = batch["target"].numpy()
             last_ctx = batch["last_ctx"].numpy()
             B = context.shape[0]
