@@ -367,13 +367,19 @@ def make_dataloaders_packed(
     # to profile_bottleneck.py, which only ever does one continuous
     # iter(train_loader) within a single epoch -- it structurally cannot
     # see a per-epoch respawn tax, since it never crosses an epoch boundary.
+    # prefetch_factor: only a valid argument when num_workers>0 (PyTorch
+    # raises otherwise). Increases how many batches each worker prepares
+    # ahead of being consumed -- default is 2; a higher value gives more
+    # slack to overlap I/O-bound loading with GPU compute, at the cost of
+    # more host RAM for buffered batches.
+    _prefetch = {"prefetch_factor": 4} if num_workers > 0 else {}
     train_loader = DataLoader(train_combined, batch_size=batch_size,
                               sampler=train_sampler, num_workers=num_workers,
                               pin_memory=True, drop_last=True,
-                              persistent_workers=(num_workers > 0))
+                              persistent_workers=(num_workers > 0), **_prefetch)
     val_loader = DataLoader(val_combined, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers, pin_memory=True,
-                            persistent_workers=(num_workers > 0))
+                            persistent_workers=(num_workers > 0), **_prefetch)
     return train_loader, val_loader, shared_stats
 
 
@@ -415,6 +421,7 @@ def make_test_loader_packed(
     combined = _ConcatDS(datasets)
     if len(combined) == 0:
         raise RuntimeError("No valid sequences found in any packed test region")
+    _prefetch = {"prefetch_factor": 4} if num_workers > 0 else {}
     return DataLoader(combined, batch_size=batch_size, shuffle=False,
                       num_workers=num_workers, pin_memory=True,
-                      persistent_workers=(num_workers > 0))
+                      persistent_workers=(num_workers > 0), **_prefetch)
