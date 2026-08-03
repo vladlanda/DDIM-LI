@@ -35,6 +35,10 @@ def parse_args():
     p.add_argument("--n_batches", type=int, default=20)
     p.add_argument("--num_workers", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=None)
+    p.add_argument("--packed_dirs", nargs="+", default=None,
+                   help="If given, profiles the PACKED memmap loader "
+                        "instead of the JPEG loader (same order as "
+                        "train_roots in the config).")
     args = p.parse_args()
     cfg = load_yaml(args.config)
     for k, v in cfg.items():
@@ -56,14 +60,28 @@ def main():
     batch_size  = args.batch_size  if args.batch_size  is not None else cfg.get("batch_size", 16)
     print(f"num_workers={num_workers}  batch_size={batch_size}  n_batches={args.n_batches}")
 
-    train_loader, _, stats = make_dataloaders(
-        train_roots=cfg["train_roots"], channel_list=cfg["channels"],
-        T_in=cfg["T_in"], T_out=cfg["T_out"], img_size=tuple(cfg["img_size"]),
-        batch_size=batch_size, num_workers=num_workers,
-        train_val_split=cfg.get("train_val_split", 0.8),
-        binary_li_ctx=cfg.get("binary_li_ctx", True),
-        ctx_channels=cfg.get("ctx_channels"),
-    )
+    if args.packed_dirs is not None:
+        from dataset_packed import make_dataloaders_packed
+        print(f"Profiling PACKED loader: {args.packed_dirs}")
+        train_loader, _, stats = make_dataloaders_packed(
+            train_packed_dirs=args.packed_dirs, channel_list=cfg["channels"],
+            T_in=cfg["T_in"], T_out=cfg["T_out"], dt_min=cfg["dt_min"],
+            batch_size=batch_size, num_workers=num_workers,
+            stats_roots=cfg["train_roots"],
+            train_val_split=cfg.get("train_val_split", 0.8),
+            binary_li_ctx=cfg.get("binary_li_ctx", True),
+            ctx_channels=cfg.get("ctx_channels"),
+        )
+    else:
+        print(f"Profiling JPEG loader")
+        train_loader, _, stats = make_dataloaders(
+            train_roots=cfg["train_roots"], channel_list=cfg["channels"],
+            T_in=cfg["T_in"], T_out=cfg["T_out"], img_size=tuple(cfg["img_size"]),
+            batch_size=batch_size, num_workers=num_workers,
+            train_val_split=cfg.get("train_val_split", 0.8),
+            binary_li_ctx=cfg.get("binary_li_ctx", True),
+            ctx_channels=cfg.get("ctx_channels"),
+        )
     channels = cfg["channels"]; C = len(channels)
 
     # ---- Stage 1: pure data loading ----
