@@ -143,24 +143,17 @@ class PackedMETSATDataset(Dataset):
         frame = np.zeros((self.C, h, w), dtype=np.float32)
         mask  = np.zeros(self.C, dtype=np.float32)
 
-        # PERFORMANCE-CRITICAL: arr[row, fancy_list] applies NumPy's advanced
-        # indexing DIRECTLY on the memmap, which is dramatically slower than
-        # plain scalar indexing (measured ~41x slower even on a small, fully
-        # -written test file -- this was the actual cause of the packed
-        # pipeline still being slow, not a fundamental memmap limitation).
-        # Fix: plain-index by row first (cheap view/read, no fancy indexing
-        # touches the memmap), THEN select channels on the small resulting
-        # in-memory (C_packed,H,W) array -- channel selection no longer
-        # costs any disk I/O once the row is already materialised.
-        row_frame = self._frames[row]   # (C_packed,H,W) uint8, plain index
-        row_mask  = self._mask[row]     # (C_packed,) uint8, plain index
-        raw_frame = row_frame[self._packed_ch_idx]   # (C,H,W), in-memory only
-        raw_mask  = row_mask[self._packed_ch_idx]     # (C,), in-memory only
+        # Plain scalar indexing (fast view), NOT arr[row, fancy_list] which
+        # triggers NumPy's advanced indexing and was measured ~41x slower
+        # on a memmap (see git history). Channel selection happens on the
+        # small, already in-memory per-row result instead.
+        row_frame = self._frames[row]
+        row_mask  = self._mask[row]
+        raw_frame = row_frame[self._packed_ch_idx]
+        raw_mask  = row_mask[self._packed_ch_idx]
 
         for i, ch in enumerate(self.channel_list):
             if raw_mask[i] == 0:
-                # EXACT match to _load_frame: raw, un-normalised fill value,
-                # normalisation skipped entirely below.
                 frame[i] = CHANNEL_FILL_VALUES.get(ch, 0.0)
                 continue
             frame[i] = raw_frame[i].astype(np.float32) * (1.0 / 255.0)
@@ -180,6 +173,17 @@ class PackedMETSATDataset(Dataset):
         # dataset.py for the reference implementation this must match.
         times = self.valid_sequences[idx]
 
+        # NOTE: a "batched, single contiguous slice read" version of this
+        # was tried and REVERTED. It was expected to help (sequential bulk
+        # read vs many small reads is normally a big win for real disk
+        # I/O), but rigorous interleaved, repeated benchmarking on a 0.39GB
+        # realistic-scale file showed it was ~1.4x SLOWER than this
+        # per-timestep loop, not faster -- reason not fully understood
+        # (possibly numpy overhead in the boolean-mask vectorised
+        # normalisation, possibly something about how memmap slice-to-array
+        # materialisation behaves vs many small scalar-indexed reads that
+        # benefit from OS readahead). Recorded honestly rather than shipped
+        # on the assumption that batching must help.
         frames, masks = zip(*[self._load_frame(t) for t in times])
         frames = np.stack(frames)
         masks  = np.stack(masks)
