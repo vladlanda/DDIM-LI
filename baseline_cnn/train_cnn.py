@@ -117,11 +117,24 @@ def parse_args():
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
+    # These keys are architecture hyperparameters for the DIFFUSION MODEL
+    # in configs/default.yaml (base_channels=64, channel_mults=[1,2,3,4],
+    # etc. -- ~22M-param scale). The generic merge loop below would
+    # silently inherit them for this CNN baseline too, since it only
+    # checks "is the arg still None", and these ARE present (non-None) in
+    # the shared config. That defeats the lightweight-CNN switch entirely
+    # -- confirmed via a real run reporting 21,768,641 params, an exact
+    # match for the diffusion model's config, not the intended ~1.45M
+    # lightweight config. Excluded here so the CNN baseline's own
+    # defaults (or explicit --base_channels etc. CLI overrides) are what
+    # actually apply, never a silent inheritance from the shared config.
+    _cnn_only_keys = {"base_channels", "channel_mults", "num_res_blocks",
+                      "attn_resolutions", "emb_dim"}
     for k, v in cfg.items():
+        if k in _cnn_only_keys:
+            continue
         if hasattr(args, k) and getattr(args, k) is None:
             setattr(args, k, v)
-    # Sensible fallbacks matching the diffusion model's architecture where
-    # not overridden by config, so the CNN gets comparable capacity.
     # Lightweight, literature-matched config (~1.4M params), NOT the
     # diffusion model's full-scale architecture. Chosen after benchmarking
     # against Metzl et al. 2025's reported ~1.6M-parameter BNN baseline and
