@@ -68,6 +68,10 @@ def parse_args():
     p.add_argument("--use_packed", action="store_true", default=False,
                    help="Auto-derive --packed_dirs as <root>/_packed for "
                         "every entry in --test_roots.")
+    p.add_argument("--preload_to_ram", action="store_true", default=False,
+                   help="Load each packed test region fully into RAM instead "
+                        "of np.memmap. See train_cnn.py --preload_to_ram for "
+                        "the full caveats (RAM size, fork vs spawn).")
     p.add_argument("--output_dir", default="baseline_cnn")
     p.add_argument("--img_size",   nargs=2, type=int, default=[256, 256])
     p.add_argument("--batch_size", type=int, default=8)
@@ -136,6 +140,7 @@ def main():
             stats=stats, stats_roots=args.test_roots,
             binary_li_ctx=ckpt_args.get("binary_li_ctx", True),
             ctx_channels=ckpt_args.get("ctx_channels"),
+            preload_to_ram=args.preload_to_ram,
         )
     else:
         test_loader = make_test_loader(

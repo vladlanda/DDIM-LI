@@ -82,6 +82,19 @@ def parse_args():
                         "location from preprocess_to_memmap.py). Avoids "
                         "manually typing out a second, parallel list that "
                         "could silently drift out of sync with --train_roots.")
+    p.add_argument("--preload_to_ram", action="store_true", default=False,
+                   help="Load each packed region's entire frames.dat/mask.dat "
+                        "into a real in-RAM array at startup instead of using "
+                        "np.memmap -- removes memmap/page-fault mechanics from "
+                        "the hot path entirely. ONLY use if you've confirmed "
+                        "the COMBINED size of all --train_roots regions "
+                        "(check with `ls -la <region>/_packed/frames.dat`) "
+                        "comfortably fits in available RAM (`free -h`) -- if "
+                        "it doesn't fit, this can cause swapping and make "
+                        "things WORSE, not better. Only safe with the default "
+                        "'fork' multiprocessing start method (Linux default) "
+                        "-- under 'spawn', each worker would redundantly "
+                        "reload its own copy, multiplying RAM use.")
     p.add_argument("--channels", nargs="+", default=None)
     p.add_argument("--T_in", type=int, default=None)
     p.add_argument("--T_out", type=int, default=None)
@@ -163,6 +176,7 @@ def main():
             stats_roots=args.train_roots,   # original JPEG roots, for stats
             train_val_split=args.train_val_split,
             binary_li_ctx=args.binary_li_ctx, ctx_channels=args.ctx_channels,
+            preload_to_ram=args.preload_to_ram,
         )
     else:
         train_loader, val_loader, stats = make_dataloaders(

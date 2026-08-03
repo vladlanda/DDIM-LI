@@ -53,6 +53,7 @@ class PackedMETSATDataset(Dataset):
         max_samples: Optional[int] = None,
         binary_li_ctx: bool = True,
         ctx_channels: Optional[List[str]] = None,
+        preload_to_ram: bool = False,
     ):
         packed_dir = Path(packed_dir)
         with open(packed_dir / "meta.json") as f:
@@ -86,6 +87,34 @@ class PackedMETSATDataset(Dataset):
                                  mode="r", shape=(N, len(packed_channels), h, w))
         self._mask   = np.memmap(packed_dir / "mask.dat", dtype=np.uint8,
                                  mode="r", shape=(N, len(packed_channels)))
+
+        if preload_to_ram:
+            # Genuinely different from the earlier (reverted) per-sample
+            # batched-slice attempt: this converts the WHOLE FILE to a
+            # real, non-memmap-backed in-RAM array ONCE, at construction,
+            # permanently removing memmap/page-fault mechanics from the
+            # hot path -- not a repeated small-scale conversion.
+            #
+            # IMPORTANT (fork semantics): this MUST run in the main
+            # process BEFORE any DataLoader worker is forked (true here,
+            # since PackedMETSATDataset construction happens during
+            # make_dataloaders_packed's setup, before DataLoader(...) is
+            # even constructed). Under Linux's default "fork" start
+            # method, forked child processes share the SAME physical
+            # pages as the parent via copy-on-write until a WRITE occurs
+            # -- since this array is read-only for the dataset's entire
+            # lifetime, workers should NOT each get their own separate
+            # copy. This assumption breaks under a "spawn" start method
+            # (not Linux's default), where each worker would independently
+            # re-run __init__ and multiply memory usage by num_workers --
+            # flagged here rather than silently assumed.
+            size_gb = (self._frames.nbytes + self._mask.nbytes) / 1e9
+            logger.info(f"preload_to_ram=True: loading {size_gb:.2f} GB into RAM "
+                       f"for '{packed_dir}' (must fit alongside all other "
+                       f"regions used in the same run, plus normal process "
+                       f"overhead)")
+            self._frames = np.array(self._frames)
+            self._mask   = np.array(self._mask)
 
         self.sorted_times = [datetime.fromisoformat(t) for t in meta["timestamps"]]
         self._row_of = {t: i for i, t in enumerate(self.sorted_times)}
@@ -292,6 +321,7 @@ def make_dataloaders_packed(
     density_percentile: float = 75.0,
     binary_li_ctx:      bool = True,
     ctx_channels:        Optional[List[str]] = None,
+    preload_to_ram:      bool = False,
 ):
     """
     Packed-data equivalent of dataset.make_dataloaders. Same temporal
@@ -311,6 +341,7 @@ def make_dataloaders_packed(
             dt_min=dt_min, stat_path=stat_path, stats_root=stats_root,
             augment=False, max_samples=max_samples,
             binary_li_ctx=binary_li_ctx, ctx_channels=ctx_channels,
+            preload_to_ram=preload_to_ram,
         )
         datasets.append(ds)
     shared_stats = datasets[0].stats
@@ -396,6 +427,7 @@ def make_test_loader_packed(
     stat_path:          Optional[str] = None,
     binary_li_ctx:      bool = True,
     ctx_channels:        Optional[List[str]] = None,
+    preload_to_ram:      bool = False,
 ):
     from torch.utils.data import DataLoader
     stats_roots = stats_roots or [None] * len(test_packed_dirs)
@@ -405,6 +437,7 @@ def make_test_loader_packed(
             packed_dir, channel_list=channel_list, T_in=T_in, T_out=T_out,
             dt_min=dt_min, stats=stats, stat_path=stat_path, stats_root=stats_root,
             augment=False, binary_li_ctx=binary_li_ctx, ctx_channels=ctx_channels,
+            preload_to_ram=preload_to_ram,
         )
         datasets.append(ds)
 
