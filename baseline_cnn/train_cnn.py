@@ -10,6 +10,12 @@ fast enough without it. Can be extended to DDP later if needed.
 Usage:
   python baseline_cnn/train_cnn.py --config configs/default.yaml \
       --epochs 150 --output_dir baseline_cnn/outputs/run1
+
+  # With W&B logging (project inherited from configs/default.yaml's
+  # wandb_project unless overridden):
+  python baseline_cnn/train_cnn.py --config configs/default.yaml \
+      --epochs 150 --output_dir baseline_cnn/outputs/run2 \
+      --wandb_project DDIM-LI
 """
 import argparse
 import logging
@@ -19,8 +25,14 @@ import sys
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
+
+try:
+    import wandb
+    HAS_WANDB = True
+except ImportError:
+    HAS_WANDB = False
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dataset import make_dataloaders, denormalize
@@ -105,8 +117,43 @@ def parse_args():
     p.add_argument("--train_val_split", type=float, default=None)
     p.add_argument("--batch_size", type=int, default=None)
     p.add_argument("--num_workers", type=int, default=4)
-    p.add_argument("--epochs", type=int, default=150)
+    p.add_argument("--epochs", type=int, default=150,
+                   help="Ceiling on epochs. With ReduceLROnPlateau + "
+                        "early stopping (see --early_stop_patience) this "
+                        "is rarely reached in practice; it just bounds "
+                        "worst-case wall-clock.")
     p.add_argument("--lr", type=float, default=2e-4)
+    p.add_argument("--weight_decay", type=float, default=None,
+                   help="L2 regularization on Adam. Default (if unset) is "
+                        "1e-4, matching Metzl et al. 2025's ResU-Net BNN "
+                        "recipe exactly -- NOT inherited from "
+                        "configs/default.yaml's weight_decay=0.0, which is "
+                        "the diffusion model's value and is justified there "
+                        "by EMA regularisation (see that config's comment) "
+                        "-- a rationale that does not apply here, since "
+                        "this CNN baseline has no EMA. Silently inheriting "
+                        "0.0 would be the same class of bug already fixed "
+                        "once for base_channels etc.; see _cnn_only_keys.")
+    p.add_argument("--lr_patience", type=int, default=5,
+                   help="ReduceLROnPlateau patience (epochs of no val_loss "
+                        "improvement before dropping LR). Matches Metzl et "
+                        "al. 2025 exactly.")
+    p.add_argument("--lr_factor", type=float, default=0.1,
+                   help="ReduceLROnPlateau LR multiplier on drop. Matches "
+                        "Metzl et al. 2025 exactly.")
+    p.add_argument("--lr_cooldown", type=int, default=3,
+                   help="ReduceLROnPlateau cooldown after a drop before "
+                        "patience counting resumes. Matches Metzl et al. "
+                        "2025 exactly.")
+    p.add_argument("--early_stop_patience", type=int, default=20,
+                   help="Stop training if val_loss hasn't improved in this "
+                        "many epochs. Set higher than lr_patience+"
+                        "lr_cooldown (default 20 > 5+3=8) so at least one "
+                        "LR drop gets a chance to produce improvement "
+                        "before giving up. Not from the literature -- a "
+                        "practical compute-budget safeguard, since best.pt "
+                        "is already checkpointed by lowest val_loss "
+                        "regardless of when/whether this triggers.")
     p.add_argument("--li_event_threshold", type=float, default=5.0/255.0)
     p.add_argument("--base_channels", type=int, default=None)
     p.add_argument("--channel_mults", nargs="+", type=int, default=None)
@@ -114,6 +161,14 @@ def parse_args():
     p.add_argument("--attn_resolutions", nargs="+", type=int, default=None)
     p.add_argument("--emb_dim", type=int, default=None)
     p.add_argument("--output_dir", required=True)
+    p.add_argument("--wandb_project", type=str, default=None,
+                   help="If set (or inherited from --config's wandb_project, "
+                        "e.g. 'DDIM-LI'), logs to Weights & Biases. Run name "
+                        "is the output_dir basename, matching train.py's "
+                        "convention for the main diffusion model, so CNN-"
+                        "baseline and diffusion-model runs are easy to tell "
+                        "apart in the same wandb project. No-op if the "
+                        "wandb package isn't installed.")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
@@ -129,7 +184,7 @@ def parse_args():
     # defaults (or explicit --base_channels etc. CLI overrides) are what
     # actually apply, never a silent inheritance from the shared config.
     _cnn_only_keys = {"base_channels", "channel_mults", "num_res_blocks",
-                      "attn_resolutions", "emb_dim"}
+                      "attn_resolutions", "emb_dim", "weight_decay"}
     for k, v in cfg.items():
         if k in _cnn_only_keys:
             continue
@@ -154,6 +209,10 @@ def parse_args():
     args.binary_li_ctx     = True if args.binary_li_ctx is None else args.binary_li_ctx
     args.train_val_split   = args.train_val_split or 0.8
     args.batch_size        = args.batch_size or 16
+    # 1e-4, matching Metzl et al. 2025's ResU-Net BNN exactly -- see the
+    # --weight_decay help text above for why this is NOT taken from
+    # configs/default.yaml despite that file having its own weight_decay key.
+    args.weight_decay      = args.weight_decay if args.weight_decay is not None else 1e-4
 
     if args.use_packed:
         if args.packed_dirs is not None:
@@ -214,10 +273,24 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     logger.info(f"DeterministicCNN params: {n_params:,}")
 
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    sched = CosineAnnealingLR(opt, T_max=args.epochs, eta_min=args.lr * 0.01)
+    logger.info(f"weight_decay={args.weight_decay}  lr_patience={args.lr_patience}  "
+               f"lr_factor={args.lr_factor}  lr_cooldown={args.lr_cooldown}  "
+               f"early_stop_patience={args.early_stop_patience}")
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # ReduceLROnPlateau monitoring val_loss, matching Metzl et al. 2025's
+    # ResU-Net recipe exactly (factor/patience/cooldown defaults above) --
+    # NOT the diffusion model's fixed CosineAnnealingLR, which has no
+    # relationship to when THIS model's val_loss actually plateaus.
+    sched = ReduceLROnPlateau(opt, mode="min", factor=args.lr_factor,
+                              patience=args.lr_patience, cooldown=args.lr_cooldown)
+
+    if HAS_WANDB and args.wandb_project:
+        wandb.init(project=args.wandb_project,
+                  name=os.path.basename(args.output_dir.rstrip("/")),
+                  config=vars(args))
 
     best_val = float("inf")
+    epochs_since_best = 0
     for epoch in range(args.epochs):
         model.train()
         total_loss = 0.0
@@ -255,8 +328,7 @@ def main():
 
             total_loss += loss.item()
             step_bar.set_postfix(loss=f"{loss.item():.4f}",
-                                 lr=f"{sched.get_last_lr()[0]:.2e}")
-        sched.step()
+                                 lr=f"{opt.param_groups[0]['lr']:.2e}")
         avg_train = total_loss / max(len(train_loader), 1)
 
         # ---- validation ----
@@ -275,7 +347,14 @@ def main():
                 logits = model(context, lead_idx)
                 val_loss += F.binary_cross_entropy_with_logits(logits, li_bin).item()
         val_loss /= max(len(val_loader), 1)
-        logger.info(f"Epoch {epoch}: train_loss={avg_train:.4f}  val_loss={val_loss:.4f}")
+        lr_before = opt.param_groups[0]["lr"]
+        sched.step(val_loss)   # ReduceLROnPlateau -- must be stepped with the monitored metric
+        lr_after = opt.param_groups[0]["lr"]
+        logger.info(f"Epoch {epoch}: train_loss={avg_train:.4f}  val_loss={val_loss:.4f}"
+                   f"{'  (LR dropped ' + f'{lr_before:.2e} -> {lr_after:.2e})' if lr_after < lr_before else ''}")
+        if HAS_WANDB and args.wandb_project:
+            wandb.log({"epoch": epoch, "train_loss": avg_train,
+                      "val_loss": val_loss, "lr": lr_after})
 
         torch.save({
             "model": model.state_dict(), "epoch": epoch, "val_loss": val_loss,
@@ -284,11 +363,22 @@ def main():
 
         if val_loss < best_val:
             best_val = val_loss
+            epochs_since_best = 0
             torch.save({
                 "model": model.state_dict(), "epoch": epoch, "val_loss": val_loss,
                 "args": vars(args), "channels": channels, "stats": stats,
             }, os.path.join(args.output_dir, "best.pt"))
             logger.info(f"  New best val_loss={val_loss:.4f}")
+        else:
+            epochs_since_best += 1
+            if epochs_since_best >= args.early_stop_patience:
+                logger.info(f"Early stopping: no val_loss improvement in "
+                           f"{args.early_stop_patience} epochs "
+                           f"(best={best_val:.4f}). best.pt is unaffected.")
+                break
+
+    if HAS_WANDB and args.wandb_project:
+        wandb.finish()
 
 
 if __name__ == "__main__":

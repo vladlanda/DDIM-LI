@@ -104,13 +104,30 @@ with margin growing from +4.6% to +50.9%.
       logits, verified empirically to cause ~1e-10x vanishing gradients
       at plausible mid-training logit magnitudes) was caught and fixed
       during a dedicated pre-training review pass — see commit history.
+      **`run1` (first real training run) showed val_loss growing after
+      epoch ~10-11.** Root cause: `train_cnn.py`'s training recipe had
+      silently diverged from Metzl et al. 2025 (the literature baseline
+      this is benchmarked against) — no `weight_decay` wired into Adam
+      at all, and a fixed `CosineAnnealingLR` instead of anything that
+      responds to validation performance. **Fixed**: `weight_decay=1e-4`
+      and `ReduceLROnPlateau(factor=0.1, patience=5, cooldown=3)`, both
+      taken directly from Metzl et al. 2025's own reported recipe, plus
+      a practical early-stopping safeguard (`--early_stop_patience`).
+      Also added optional W&B logging (`--wandb_project`, run name from
+      `output_dir` basename, matching `train.py`'s convention for the
+      main model). See FINDINGS.md C6/C7 for the full diagnosis,
+      including which OTHER literature departures (context window,
+      lead-time amortization) were deliberately kept, and why.
+      **`run1`'s checkpoints predate this fix — re-run before trusting
+      any CNN-baseline numbers for the paper.**
       **Owner: user — train, then evaluate:**
       ```
       python baseline_cnn/train_cnn.py --config configs/default.yaml \
-          --epochs 150 --output_dir baseline_cnn/outputs/run1
+          --epochs 150 --output_dir baseline_cnn/outputs/run2 \
+          --wandb_project DDIM-LI
 
       python baseline_cnn/evaluate_cnn.py --config configs/evaluate.yaml \
-          --checkpoint baseline_cnn/outputs/run1/best.pt \
+          --checkpoint baseline_cnn/outputs/run2/best.pt \
           --output_dir baseline_cnn
 
       python bootstrap_pr_auc_ci.py \

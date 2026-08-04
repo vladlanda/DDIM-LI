@@ -130,6 +130,78 @@ quality contribution, not itself a headline result, but should be
 disclosed since every prior baseline number in this project trained on
 the contaminated data.
 
+### C6. CNN baseline's training recipe silently diverged from its own literature comparator, weakening it — CONFIRMED, fixed
+While diagnosing an unexpected val_loss growth after epoch ~10-11 in
+`baseline_cnn/`'s first real training run (`run1`, post-fix-#5's
+lightweight-architecture correction), a direct comparison against Metzl
+et al. 2025 (the paper this baseline is explicitly benchmarked against)
+found two silent regularization gaps, not deliberate design choices:
+  - `weight_decay` was never wired into `train_cnn.py`'s Adam optimizer
+    at all. `configs/default.yaml`'s `weight_decay: 0.0` field would
+    have been silently inherited even if changed, and that field's own
+    justification ("EMA already regularises") is specific to the
+    diffusion model — `baseline_cnn/` has no EMA, so the rationale
+    never applied here. Same *class* of bug as the base_channels
+    architecture-inheritance issue (item 5, `PAPER_TODO.md`), caught by
+    applying the same "is this actually intentional or just inherited"
+    scrutiny.
+  - LR schedule was `CosineAnnealingLR` (fixed decay over `--epochs`,
+    unrelated to when val_loss actually plateaus), not anything that
+    responds to validation performance.
+Metzl et al. 2025 report weight_decay=1e-4 (L2) and
+`ReduceLROnPlateau(factor=0.1, patience=5, cooldown=3)` monitoring
+val_loss explicitly "to ensure no overfitting" — i.e. their recipe is
+designed against exactly the failure mode observed in `run1`.
+**Fix applied** (commit on `paper` branch): `train_cnn.py` now uses
+both values from Metzl et al. 2025 directly (not invented), plus a
+practical (non-literature) early-stopping safeguard
+(`--early_stop_patience`, default 20) to cap wall-clock once plateaued.
+Verified via a synthetic scheduler/optimizer smoke test that
+`weight_decay` lands on the optimizer and `ReduceLROnPlateau` correctly
+drops LR on a val_loss curve shaped like `run1`'s real one, before
+trusting the fix — consistent with this project's "validate before
+trusting" practice. **Not yet re-run on real data as of this entry**
+(`run1`'s numbers predate the fix; a fresh run, e.g. `run2`, is needed
+to confirm the fix actually resolves the overfitting in practice, not
+just mechanically).
+**Methods-section implication:** this is worth a one-line note —
+"training regularization (weight decay, LR schedule) follows Metzl et
+al. 2025" — which is a stronger, more citable framing than either
+silence or an arbitrary home-grown choice.
+
+### C7. Two remaining CNN-baseline departures from the literature are being kept, deliberately — CAVEAT, worth stating explicitly
+Two other differences from Metzl et al. 2025 / Cintineo et al. 2022
+were reviewed alongside C6 and kept as-is, for a different reason than
+C6's gaps: they serve *this paper's* internal comparison logic, not
+just literature fidelity.
+  - **Context window:** `T_in=36` (6h) here, vs. Metzl's BNN using only
+    the last 2 observations (~15-30min). Kept because giving the CNN
+    baseline the SAME context window as the main diffusion model holds
+    input information constant across the comparison, isolating model
+    architecture as the controlled variable — shortening it to match
+    Metzl would instead confound architecture with information budget,
+    the same category of confound this project has been careful to
+    avoid elsewhere (see Phase 1's channel-pruning-vs-dataset-
+    regeneration issue).
+  - **Lead-time amortization:** one model conditioned on `lead_idx`
+    across all 6 output steps, vs. Metzl/Cintineo training a SEPARATE
+    network per lead time. Kept for the same reason — the main
+    diffusion model is also a single model amortized across lead
+    times, so this keeps that structural choice consistent across the
+    paper's own model comparisons. (Already flagged honestly in
+    `model_cnn.py`'s docstring before this review.)
+Class-imbalance handling (oversampling via the shared
+`WeightedRandomSampler`, vs. Metzl/Cintineo's undersampling) was
+reviewed too and kept for the same reason: it's the same mechanism the
+main model and other baselines already use, so keeping it here isolates
+architecture as the controlled variable rather than introducing a
+second free-floating methodological difference.
+**Methods-section implication:** state these two/three departures
+explicitly with the fairness rationale above, rather than leaving a
+sharp reviewer to wonder why the setup doesn't match Metzl's exactly —
+this is a case where explaining the choice is a strength, not a
+defensive footnote.
+
 ---
 
 ## D. Data pipeline integrity (methods/reproducibility, not scientific findings per se)
@@ -237,8 +309,6 @@ didn't pan out. Worth keeping in the paper as a physical characterization
 result even without a corresponding architecture change.
 
 ---
-
-## F. Framing / comparison caveats (important for Discussion / avoiding overclaiming)
 
 ### F1. Song et al. 2023's 0.727 PR-AUC is NOT directly comparable to ours — CAVEAT, important
 Their task: 0.25°/hourly/coarse classification (LightGBM). Ours: 4km/
