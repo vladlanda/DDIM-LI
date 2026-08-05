@@ -236,6 +236,31 @@ with a synthetic save/load test before trusting it.
 **Lesson for process, not for the paper:** worth doing one more such
 review pass before any other expensive/one-shot run in this project.
 
+### D4. dataset.py's make_dataloaders (JPEG path) was missing the same persistent_workers fix already applied to dataset_packed.py — CONFIRMED, fixed
+`baseline_cnn/train_cnn.py`'s default launch command doesn't pass
+`--use_packed`, so it exercises `dataset.py`'s plain-JPEG
+`make_dataloaders`, not the memmap `dataset_packed.py` path. That
+function never got the `persistent_workers=True`/`prefetch_factor`
+fix that `dataset_packed.py` already carries (see the D-section intro
+saga) — meaning with `num_workers>0` it re-forks all worker processes
+at the START OF EVERY EPOCH, not just once at startup. A `run2`
+resumption (`--num_workers 8`, W&B logging now active) hung
+indefinitely between epochs with no error/crash — consistent with a
+classic fork-after-threading deadlock: forking a process with live
+background threads (CUDA context; newly, W&B's internal reporting
+thread) can inherit a lock held mid-fork by another thread, deadlocking
+the child forever. Landing exactly at the epoch boundary matches the
+observed symptom. `train.py` (main model) also calls this same
+function, so the gap was live there too, just apparently never
+triggered in practice (real long runs there use `--use_packed`, per
+project convention). **Fixed**: `persistent_workers=(num_workers>0)`
++ `prefetch_factor=4` added, matching `dataset_packed.py`'s existing,
+already-battle-tested pattern exactly. **Not a certainty** — diagnosed
+from code inspection and the well-known failure signature, not from a
+captured stack trace of the actual hang (the process wasn't
+`py-spy`-dumped before being restarted) — but consistent with all
+available evidence and a strictly-safe change regardless.
+
 ### E1. Positional-vs-existence error decomposition at long lead time — CONFIRMED on final model, refined
 Re-run on the final 2-channel model at both threshold extremes:
   - **prob_thr=0.5 (high confidence):** POSITIONAL at every lead 10-60min,

@@ -768,13 +768,28 @@ def make_dataloaders(
         replacement = True,
     )
 
+    # persistent_workers=True: without this, DataLoader tears down all
+    # worker processes and re-forks fresh ones EVERY epoch (not just at
+    # startup). Re-forking a process with live background threads (CUDA
+    # context, and anything else that's spun up a thread by then, e.g.
+    # W&B's internal reporting thread) risks an indefinite hang with no
+    # error and no crash: if some other thread holds a lock at the exact
+    # instant of fork(), the child inherits it pre-locked and deadlocks
+    # forever waiting on it -- landing exactly at the epoch boundary.
+    # dataset_packed.py already carries this same fix; make_dataloaders
+    # (this, JPEG-based path) originally didn't, and did produce hangs
+    # at epoch boundaries under num_workers>0 once W&B logging was added.
+    # prefetch_factor: only a valid DataLoader kwarg when num_workers>0.
+    _prefetch = {"prefetch_factor": 4} if num_workers > 0 else {}
     train_loader = DataLoader(
         train_combined, batch_size=batch_size, sampler=train_sampler,
         num_workers=num_workers, pin_memory=True, drop_last=True,
+        persistent_workers=(num_workers > 0), **_prefetch,
     )
     val_loader = DataLoader(
         val_combined, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
+        persistent_workers=(num_workers > 0), **_prefetch,
     )
     return train_loader, val_loader, shared_stats
 
