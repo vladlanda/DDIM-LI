@@ -161,6 +161,16 @@ def parse_args():
     p.add_argument("--attn_resolutions", nargs="+", type=int, default=None)
     p.add_argument("--emb_dim", type=int, default=None)
     p.add_argument("--output_dir", required=True)
+    p.add_argument("--resume", nargs="?", const="__auto__", default=None,
+                   help="Resume from a checkpoint. Bare --resume auto-uses "
+                        "<output_dir>/latest.pt. Or give an explicit path: "
+                        "--resume path/to/checkpoint.pt. Model weights "
+                        "always resume exactly. Optimizer/scheduler state "
+                        "resumes exactly too IF the checkpoint has it "
+                        "(saved from this fix onward) -- older checkpoints "
+                        "lack it, so Adam momentum and the "
+                        "ReduceLROnPlateau plateau/cooldown counters "
+                        "restart fresh in that case (logged either way).")
     p.add_argument("--wandb_project", type=str, default=None,
                    help="If set (or inherited from --config's wandb_project, "
                         "e.g. 'DDIM-LI'), logs to Weights & Biases. Run name "
@@ -284,14 +294,61 @@ def main():
     sched = ReduceLROnPlateau(opt, mode="min", factor=args.lr_factor,
                               patience=args.lr_patience, cooldown=args.lr_cooldown)
 
-    if HAS_WANDB and args.wandb_project:
-        wandb.init(project=args.wandb_project,
-                  name=os.path.basename(args.output_dir.rstrip("/")),
-                  config=vars(args))
-
+    start_epoch = 0
     best_val = float("inf")
+    if args.resume is not None:
+        ckpt_path = (os.path.join(args.output_dir, "latest.pt")
+                    if args.resume == "__auto__" else args.resume)
+        if not os.path.isfile(ckpt_path):
+            raise FileNotFoundError(f"--resume checkpoint not found: {ckpt_path}")
+        logger.info(f"Resuming from {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt["model"])
+        start_epoch = ckpt["epoch"] + 1
+        if "opt" in ckpt:
+            opt.load_state_dict(ckpt["opt"])
+            logger.info("  Restored optimizer state (Adam momentum/variance) exactly.")
+        else:
+            logger.warning("  Checkpoint predates optimizer-state saving -- "
+                          "Adam momentum restarts fresh. Model weights are "
+                          "still resumed exactly.")
+        if "sched" in ckpt:
+            sched.load_state_dict(ckpt["sched"])
+            logger.info(f"  Restored LR-scheduler state exactly "
+                       f"(current LR={opt.param_groups[0]['lr']:.2e}).")
+        else:
+            logger.warning("  Checkpoint predates scheduler-state saving -- "
+                          "ReduceLROnPlateau's plateau/cooldown counters "
+                          "restart fresh at the original --lr.")
+        # Prefer best.pt (if present, alongside this checkpoint's own dir)
+        # for best_val, since latest.pt's val_loss is just its OWN epoch's
+        # value, not necessarily the best seen so far.
+        best_path = os.path.join(os.path.dirname(ckpt_path) or ".", "best.pt")
+        if os.path.isfile(best_path):
+            best_ckpt = torch.load(best_path, map_location="cpu")
+            best_val = best_ckpt["val_loss"]
+            logger.info(f"  best_val initialized from best.pt: "
+                       f"{best_val:.4f} (epoch {best_ckpt['epoch']})")
+        else:
+            best_val = ckpt["val_loss"]
+        logger.info(f"  Resuming at epoch {start_epoch}, best_val={best_val:.4f}. "
+                   f"epochs_since_best resets to 0 (not saved historically -- "
+                   f"conservative default, avoids stopping too early).")
+
+    if HAS_WANDB and args.wandb_project:
+        wandb_kwargs = dict(project=args.wandb_project,
+                           name=os.path.basename(args.output_dir.rstrip("/")),
+                           config=vars(args))
+        if args.resume is not None:
+            # Reuse the same run id (= output_dir basename) so resumed
+            # training appends to the same W&B run instead of starting a
+            # visually disconnected new one.
+            wandb_kwargs["id"] = os.path.basename(args.output_dir.rstrip("/"))
+            wandb_kwargs["resume"] = "allow"
+        wandb.init(**wandb_kwargs)
+
     epochs_since_best = 0
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
         step_bar = tqdm(train_loader, desc=f"Epoch {epoch}", dynamic_ncols=True)
@@ -357,7 +414,8 @@ def main():
                       "val_loss": val_loss, "lr": lr_after})
 
         torch.save({
-            "model": model.state_dict(), "epoch": epoch, "val_loss": val_loss,
+            "model": model.state_dict(), "opt": opt.state_dict(),
+            "sched": sched.state_dict(), "epoch": epoch, "val_loss": val_loss,
             "args": vars(args), "channels": channels, "stats": stats,
         }, os.path.join(args.output_dir, "latest.pt"))
 
@@ -365,7 +423,8 @@ def main():
             best_val = val_loss
             epochs_since_best = 0
             torch.save({
-                "model": model.state_dict(), "epoch": epoch, "val_loss": val_loss,
+                "model": model.state_dict(), "opt": opt.state_dict(),
+                "sched": sched.state_dict(), "epoch": epoch, "val_loss": val_loss,
                 "args": vars(args), "channels": channels, "stats": stats,
             }, os.path.join(args.output_dir, "best.pt"))
             logger.info(f"  New best val_loss={val_loss:.4f}")
