@@ -392,7 +392,8 @@ def main():
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
-            for batch in val_loader:
+            val_bar = tqdm(val_loader, desc=f"Epoch {epoch} [val]", dynamic_ncols=True)
+            for batch in val_bar:
                 context  = batch["context"].to(device, non_blocking=True)
                 target   = batch["target"].to(device, non_blocking=True)
                 last_ctx = batch["last_ctx"].to(device, non_blocking=True)
@@ -402,7 +403,9 @@ def main():
                 li_phys = _li_to_physical_torch(tgt_abs[:, li_idx], stats)
                 li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)
                 logits = model(context, lead_idx)
-                val_loss += F.binary_cross_entropy_with_logits(logits, li_bin).item()
+                batch_loss = F.binary_cross_entropy_with_logits(logits, li_bin).item()
+                val_loss += batch_loss
+                val_bar.set_postfix(loss=f"{batch_loss:.4f}")
         val_loss /= max(len(val_loader), 1)
         lr_before = opt.param_groups[0]["lr"]
         sched.step(val_loss)   # ReduceLROnPlateau -- must be stepped with the monitored metric
