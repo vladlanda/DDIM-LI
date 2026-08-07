@@ -13,6 +13,13 @@ Output schema (CSV + npz with pr_seqid) matches persistence_baseline.py /
 optical_flow_baseline.py for direct bootstrap-CI comparability via
 bootstrap_pr_auc_ci.py.
 
+Also saves standalone, journal-style white-theme plots (CNN-only, not
+overlaid with the main model or other baselines -- see FINDINGS.md /
+PAPER_TODO.md for that separate, larger gap):
+  baseline_cnn_skill_curves.png       — CSI/POD/FAR/PR-AUC vs lead time
+  baseline_cnn_precision_recall.png   — PR curves, one line per lead time
+  baseline_cnn_calibration.png        — reliability diagram per lead time
+
 Usage:
   python baseline_cnn/evaluate_cnn.py --config configs/evaluate.yaml \
       --checkpoint baseline_cnn/outputs/run1/best.pt \
@@ -100,6 +107,143 @@ def parse_args():
                 f"--test_roots first."
             )
     return args
+
+
+def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
+                pr_curves, auc_by_step, cal_curves, fss_prob_thresholds):
+    """Save journal-style white-theme PNGs for the CNN baseline, matching
+    evaluate.py's plotting theme/palette (same rcParams, same turbo
+    lead-time colormap, same axis-styling helper) so figures compare
+    cleanly side by side. Standalone (CNN-only) plots -- NOT an overlay
+    with the main model or other baselines; see FINDINGS.md/PAPER_TODO.md
+    for the separate multi-baseline comparison-figure gap."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as mcm
+
+    plt.rcParams.update({
+        "figure.facecolor":  "white",
+        "axes.facecolor":    "white",
+        "axes.edgecolor":    "black",
+        "axes.labelcolor":   "black",
+        "xtick.color":       "black",
+        "ytick.color":       "black",
+        "text.color":        "black",
+        "grid.color":        "#cccccc",
+        "grid.linestyle":    "--",
+        "grid.linewidth":    0.5,
+        "legend.framealpha": 0.9,
+        "legend.edgecolor":  "#cccccc",
+        "font.size":         9,
+    })
+
+    def _styled_ax(ax):
+        ax.set_facecolor("white")
+        ax.tick_params(colors="black")
+        ax.xaxis.label.set_color("black")
+        ax.yaxis.label.set_color("black")
+        ax.title.set_color("black")
+        for s in ax.spines.values():
+            s.set_edgecolor("black")
+            s.set_linewidth(0.8)
+        ax.grid(True, color="#cccccc", linestyle="--", linewidth=0.5, zorder=0)
+
+    lt = lead_times
+    lt_cmap = mcm.get_cmap("turbo")
+    lt_colors = [lt_cmap(i / max(T_out - 1, 1)) for i in range(T_out)]
+
+    def _lt_legend(ax, labeled_steps, ncol=2, loc="best", extra_handles=None):
+        handles = list(extra_handles or [])
+        for t in labeled_steps:
+            handles.append(plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
+                                      label=f"+{(t+1)*dt_min}m"))
+        ax.legend(handles=handles, fontsize=7.5, ncol=ncol, loc=loc,
+                  framealpha=0.9, handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
+
+    # ── Figure 1: CSI / POD / FAR / PR-AUC vs lead time ─────────────
+    thr_palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                   "#8c564b", "#e377c2", "#7f7f7f"]
+    thr_colors  = {thr: thr_palette[i % len(thr_palette)]
+                   for i, thr in enumerate(fss_prob_thresholds)}
+
+    fig1, axes1 = plt.subplots(2, 2, figsize=(12, 9))
+    fig1.patch.set_facecolor("white")
+    ax_csi, ax_pod, ax_far, ax_aucp = axes1.flatten()
+
+    for thr in fss_prob_thresholds:
+        c, lbl = thr_colors[thr], f"p>{thr}"
+        ax_csi.plot(lt, [r.get(f"csi_{thr}", float("nan")) for r in per_step],
+                    color=c, linewidth=1.5, label=lbl)
+        ax_pod.plot(lt, [r.get(f"pod_{thr}", float("nan")) for r in per_step],
+                    color=c, linewidth=1.5, label=lbl)
+        ax_far.plot(lt, [r.get(f"far_{thr}", float("nan")) for r in per_step],
+                    color=c, linewidth=1.5, label=lbl)
+    ax_aucp.plot(lt, [r.get("pr_auc", float("nan")) for r in per_step],
+                color="#9467bd", linewidth=1.5, marker="o", markersize=4)
+
+    for ax, title, ylabel, ylim in [
+        (ax_csi,  "CSI vs Lead Time",    "CSI",    (0, 1)),
+        (ax_pod,  "POD vs Lead Time",    "POD",    (0, 1)),
+        (ax_far,  "FAR vs Lead Time",    "FAR",    (0, 1)),
+        (ax_aucp, "PR-AUC vs Lead Time", "PR-AUC", (0, 1)),
+    ]:
+        ax.set_title(title); ax.set_xlabel("Lead time (min)"); ax.set_ylabel(ylabel)
+        if ylim: ax.set_ylim(*ylim)
+        _styled_ax(ax)
+    for ax in [ax_csi, ax_pod, ax_far]:
+        ax.legend(fontsize=8, framealpha=0.9)
+
+    fig1.suptitle("CNN Baseline — Lightning Detection Skill", fontsize=12, fontweight="bold")
+    fig1.tight_layout()
+    skill_path = os.path.join(output_dir, "baseline_cnn_skill_curves.png")
+    fig1.savefig(skill_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig1)
+    logger.info(f"Skill curves    -> {skill_path}")
+
+    # ── Figure 2: Precision-Recall curves, one line per lead time ──
+    fig2, ax2 = plt.subplots(figsize=(6.5, 5.5))
+    fig2.patch.set_facecolor("white")
+    for t, (prec, rec) in pr_curves.items():
+        ax2.plot(rec, prec, color=lt_colors[t], linewidth=1.2, alpha=0.9)
+    ax2.set_xlabel("Recall (POD)")
+    ax2.set_ylabel("Precision (1 \u2212 FAR)")
+    ax2.set_title("CNN Baseline \u2014 Precision-Recall Curves", fontweight="bold")
+    ax2.set_xlim(0, 1); ax2.set_ylim(0, 1)
+    _styled_ax(ax2)
+    handles_pr = [
+        plt.Line2D([0], [0], color=lt_colors[t], linewidth=2,
+                   label=f"+{(t+1)*dt_min}m  AUC={auc_by_step.get(t, float('nan')):.2f}")
+        for t in sorted(pr_curves.keys())
+    ]
+    ax2.legend(handles=handles_pr, fontsize=7.5, ncol=2, loc="lower left",
+              framealpha=0.9, handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
+    fig2.tight_layout()
+    pr_path = os.path.join(output_dir, "baseline_cnn_precision_recall.png")
+    fig2.savefig(pr_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig2)
+    logger.info(f"PR curves       -> {pr_path}")
+
+    # ── Figure 3: Reliability / calibration diagram ─────────────────
+    fig3, ax3 = plt.subplots(figsize=(6, 5.5))
+    fig3.patch.set_facecolor("white")
+    diag_line = plt.Line2D([0], [0], color="black", linestyle="--",
+                           linewidth=1.2, label="Perfect calibration")
+    ax3.plot([0, 1], [0, 1], color="black", linestyle="--", linewidth=1.2, zorder=5)
+    for t, (mean_pred, frac_pos) in cal_curves.items():
+        ax3.plot(mean_pred, frac_pos, color=lt_colors[t], linewidth=1.2,
+                 marker="o", markersize=3, alpha=0.9)
+    ax3.set_xlabel("Mean Predicted Probability")
+    ax3.set_ylabel("Observed Frequency")
+    ax3.set_title("CNN Baseline \u2014 Reliability Diagram", fontweight="bold")
+    ax3.set_xlim(0, 1); ax3.set_ylim(0, 1)
+    _styled_ax(ax3)
+    _lt_legend(ax3, sorted(cal_curves.keys()), loc="upper left", extra_handles=[diag_line])
+    fig3.tight_layout()
+    cal_path = os.path.join(output_dir, "baseline_cnn_calibration.png")
+    fig3.savefig(cal_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig3)
+    logger.info(f"Calibration     -> {cal_path}")
 
 
 def main():
@@ -205,6 +349,7 @@ def main():
 
     npz_payload = {"pr_steps": np.array(list(pr_curves.keys())), "dt_min": np.array(dt_min),
                    "n_sequences": np.array(seq_counter)}
+    cal_curves = {}
     for t, (prec, rec) in pr_curves.items():
         npz_payload[f"prec_{t}"] = prec
         npz_payload[f"rec_{t}"]  = rec
@@ -215,6 +360,7 @@ def main():
             frac_pos, mean_pred = _cal_curve(all_lbl, all_prob, n_bins=10, strategy="uniform")
             npz_payload[f"cal_mean_{t}"] = mean_pred.astype(np.float32)
             npz_payload[f"cal_frac_{t}"] = frac_pos.astype(np.float32)
+            cal_curves[t] = (mean_pred.astype(np.float32), frac_pos.astype(np.float32))
         except Exception as e:
             logger.warning(f"Calibration failed at step {t}: {e}")
         npz_payload[f"pr_prob_{t}"]  = np.concatenate(pr_probs[t]).astype(np.float32)
@@ -257,6 +403,9 @@ def main():
         writer.writeheader()
         writer.writerows(per_step)
     logger.info(f"Saved -> {csv_path}")
+
+    _make_plots(args.output_dir, T_out, dt_min, lead_times, per_step,
+               pr_curves, auc_by_step, cal_curves, args.fss_prob_thresholds)
 
     print("\n=== Deterministic CNN Baseline — Summary ===")
     print(f"{'Lead':>8}  {'PR-AUC':>8}  {'CSI_max':>8}")
