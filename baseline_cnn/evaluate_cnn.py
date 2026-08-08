@@ -19,6 +19,13 @@ PAPER_TODO.md for that separate, larger gap):
   baseline_cnn_skill_curves.png       — CSI/POD/FAR/PR-AUC vs lead time
   baseline_cnn_precision_recall.png   — PR curves, one line per lead time
   baseline_cnn_calibration.png        — reliability diagram per lead time
+  baseline_cnn_fss_vs_scale.png       — FSS vs spatial scale (matches
+                                         evaluate.py's fss_vs_scale.png,
+                                         same [1,2,4,8,16,32] pixel scales
+                                         by default) -- the key diagnostic
+                                         for whether a pointwise-metric
+                                         (PR-AUC/CSI) advantage survives
+                                         spatial tolerance, see FINDINGS.md.
 
 Usage:
   python baseline_cnn/evaluate_cnn.py --config configs/evaluate.yaml \
@@ -86,6 +93,16 @@ def parse_args():
     p.add_argument("--li_event_threshold", type=float, default=5.0/255.0)
     p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
                    default=[0.1, 0.3, 0.5])
+    p.add_argument("--fss_scales", nargs="+", type=int,
+                   default=[1, 2, 4, 8, 16, 32],
+                   help="FSS neighbourhood half-widths in pixels, matching "
+                        "evaluate.py/configs/evaluate.yaml exactly -- was "
+                        "previously hardcoded to scale=1 only (pointwise, "
+                        "no spatial tolerance), unlike the main model's "
+                        "multi-scale evaluation. Needed to test whether a "
+                        "baseline's pointwise-metric advantage survives "
+                        "spatial tolerance (see FINDINGS.md).")
+    p.add_argument("--pixel_size_km", type=float, default=4.0)
     args = p.parse_args()
     if args.config is not None:
         cfg = load_yaml(args.config)
@@ -110,7 +127,8 @@ def parse_args():
 
 
 def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
-                pr_curves, auc_by_step, cal_curves, fss_prob_thresholds):
+                pr_curves, auc_by_step, cal_curves, fss_prob_thresholds,
+                fss_scales, pixel_size_km):
     """Save journal-style white-theme PNGs for the CNN baseline, matching
     evaluate.py's plotting theme/palette (same rcParams, same turbo
     lead-time colormap, same axis-styling helper) so figures compare
@@ -245,6 +263,60 @@ def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
     plt.close(fig3)
     logger.info(f"Calibration     -> {cal_path}")
 
+    # ── Figure 4: FSS vs spatial scale ───────────────────────────────
+    # The key diagnostic for whether a pointwise-metric advantage (raw
+    # PR-AUC/CSI at scale=1) survives spatial tolerance, or is a "double
+    # penalty" artifact of scoring a genuinely spatially-uncertain field
+    # pointwise. Top row: one line per lead time. Bottom row: mean over
+    # lead times, one line per threshold -- mirrors evaluate.py exactly
+    # so the two fss_vs_scale.png figures are directly comparable.
+    thr_palette3 = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
+    thr_colors3  = {thr: thr_palette3[i % len(thr_palette3)]
+                    for i, thr in enumerate(fss_prob_thresholds)}
+    n_thr = len(fss_prob_thresholds)
+    scale_km = [(2 * s + 1) * pixel_size_km for s in fss_scales]
+
+    fig4, axes4 = plt.subplots(2, n_thr, figsize=(5.5 * n_thr, 9), squeeze=False)
+    fig4.patch.set_facecolor("white")
+
+    for col, thr in enumerate(fss_prob_thresholds):
+        ax_top, ax_bot = axes4[0, col], axes4[1, col]
+
+        for t in range(T_out):
+            fss_vals = [per_step[t].get(f"fss_{thr}_scale{s}", float("nan"))
+                       for s in fss_scales]
+            ax_top.plot(scale_km, fss_vals, color=lt_colors[t],
+                       linewidth=1.0, marker="o", markersize=2, alpha=0.8)
+        ax_top.axhline(0.5, color="#d62728", linestyle="--", linewidth=1.5)
+        ax_top.set_title(f"FSS  (p > {thr})", fontweight="bold")
+        ax_top.set_xlabel("Scale (km)"); ax_top.set_ylabel("FSS")
+        ax_top.set_ylim(-0.05, 1.05)
+        _styled_ax(ax_top)
+        skill_line = plt.Line2D([0], [0], color="#d62728", linestyle="--",
+                                linewidth=1.5, label="FSS=0.5")
+        _lt_legend(ax_top, list(range(T_out)), ncol=3, loc="lower right",
+                  extra_handles=[skill_line])
+
+        fss_mean = [float(np.mean([per_step[t].get(f"fss_{thr}_scale{s}", np.nan)
+                                   for t in range(T_out)]))
+                   for s in fss_scales]
+        ax_bot.plot(scale_km, fss_mean, color=thr_colors3[thr],
+                   linewidth=2.0, marker="o", markersize=5, label=f"Mean (p>{thr})")
+        ax_bot.axhline(0.5, color="#d62728", linestyle="--", linewidth=1.5, label="FSS=0.5")
+        ax_bot.set_title(f"FSS mean over lead times  (p > {thr})", fontweight="bold")
+        ax_bot.set_xlabel("Scale (km)"); ax_bot.set_ylabel("FSS")
+        ax_bot.set_ylim(-0.05, 1.05)
+        ax_bot.legend(fontsize=9)
+        _styled_ax(ax_bot)
+
+    fig4.suptitle(f"CNN Baseline — FSS vs Spatial Scale — {T_out} lead times",
+                 fontsize=12, fontweight="bold")
+    fig4.tight_layout()
+    fss_path = os.path.join(output_dir, "baseline_cnn_fss_vs_scale.png")
+    fig4.savefig(fss_path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close(fig4)
+    logger.info(f"FSS vs scale    -> {fss_path}")
+
 
 def main():
     args = parse_args()
@@ -301,7 +373,10 @@ def main():
     pr_labels = {t: [] for t in range(T_out)}
     pr_seqids = {t: [] for t in range(T_out)}
     skill_by_step = [[] for _ in range(T_out)]
-    fss_by_step = {thr: [[] for _ in range(T_out)] for thr in args.fss_prob_thresholds}
+    fss_by_thr_scale_step = {
+        thr: {s: [[] for _ in range(T_out)] for s in args.fss_scales}
+        for thr in args.fss_prob_thresholds
+    }
     seq_counter = 0
 
     with torch.no_grad():
@@ -326,8 +401,10 @@ def main():
                         skill_by_step[t].append(lightning_skill_curve(p, o))
                     for thr in args.fss_prob_thresholds:
                         if fss is not None:
-                            fss_by_step[thr][t].append(
-                                fss((p >= thr).astype(float), o, scale=1))
+                            p_bin_thr = (p >= thr).astype(float)
+                            for s in args.fss_scales:
+                                fss_by_thr_scale_step[thr][s][t].append(
+                                    fss(p_bin_thr, o, scale=s))
 
                     stride = max(1, o.size // 4096)
                     flat_p = p.ravel()[::stride]
@@ -392,7 +469,8 @@ def main():
                     csi_max_vals.append(sc["csi"][int(np.argmax(sc["csi"]))])
             row["csi_max"] = _mean(csi_max_vals)
         for thr in args.fss_prob_thresholds:
-            row[f"fss_{thr}"] = _mean(fss_by_step[thr][t])
+            for s in args.fss_scales:
+                row[f"fss_{thr}_scale{s}"] = _mean(fss_by_thr_scale_step[thr][s][t])
         if t in auc_by_step:
             row["pr_auc"] = auc_by_step[t]
         per_step.append(row)
@@ -405,7 +483,8 @@ def main():
     logger.info(f"Saved -> {csv_path}")
 
     _make_plots(args.output_dir, T_out, dt_min, lead_times, per_step,
-               pr_curves, auc_by_step, cal_curves, args.fss_prob_thresholds)
+               pr_curves, auc_by_step, cal_curves, args.fss_prob_thresholds,
+               args.fss_scales, args.pixel_size_km)
 
     print("\n=== Deterministic CNN Baseline — Summary ===")
     print(f"{'Lead':>8}  {'PR-AUC':>8}  {'CSI_max':>8}")

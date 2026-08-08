@@ -384,6 +384,55 @@ baseline alongside physical baselines is a real gap in our current
 baseline set (persistence + 2 optical-flow variants, no trained CNN).
 See PAPER_TODO.md Phase 3 for the concrete plan.
 
+### F4. CNN baseline beats the diffusion model on raw pointwise PR-AUC at every lead time — PENDING, diagnostic in place, not yet resolved
+First real evaluation comparison: CNN baseline PR-AUC 0.867 → 0.655
+vs. diffusion model 0.819 → 0.591 (+10min → +60min), a consistent
+~0.05-0.065 absolute margin in the CNN's favor at every one of the 6
+lead times. This directly contradicts the paper's intended headline
+framing (diffusion model beats simpler baselines) and needs resolving
+before any final numbers, not glossed over.
+**Two hypotheses, NOT mutually exclusive, neither confirmed yet:**
+  1. **Probability-granularity confound.** The CNN's PR-AUC input is a
+     continuous sigmoid output. The diffusion model's, per `evaluate.py`,
+     is `(ens_phys >= threshold).mean(axis=0)` with `n_members=10` —
+     i.e. only 11 discrete probability levels. A coarser probability
+     scale measurably lowers measured PR-AUC independent of true
+     discriminative skill. Untested: whether increasing `--n_members`
+     closes any of the gap.
+  2. **"Double penalty" effect (the more likely, more interesting
+     explanation).** Well-documented in precipitation/nowcasting
+     literature (part of the standard motivation for generative over
+     regression-style nowcasting models, e.g. Ravuri et al. 2021/DGMR):
+     a model trained with a plain per-pixel loss under genuine
+     positional uncertainty learns to hedge/blur toward wherever an
+     event might plausibly be, which scores deceptively well on strict
+     pointwise metrics (raw PR-AUC/CSI at zero spatial tolerance) by
+     avoiding confidently-wrong exact-pixel predictions. A diffusion
+     ensemble's individual members are sharp, physically-plausible
+     realizations — the actual point of using one — but that is a
+     harder pointwise-scoring target than a hedged/blurred field, even
+     when it is the more honest representation of uncertainty. This
+     connects directly to E2 (displacement is incoherent, not
+     advective) — genuine, irreducible positional uncertainty is
+     already established here, which is exactly the precondition for
+     this effect.
+**Diagnostic added, not yet run:** `evaluate_cnn.py` previously only
+computed FSS at `scale=1` (pointwise, no spatial tolerance) — extended
+to the same multi-scale `[1,2,4,8,16,32]` pixel neighbourhoods
+`evaluate.py` already uses for the main model (`baseline_cnn_fss_vs_scale.png`,
+matching layout). **If hypothesis 2 is correct, the CNN's advantage
+should shrink or reverse as spatial tolerance increases; if the CNN
+stays ahead even at large neighbourhood scales, that's evidence for a
+genuine baseline advantage, not a scoring artifact, and needs a
+different explanation** (possibly still the training-recipe items in
+C6/C7, or something not yet identified).
+**Also unverified:** both evaluations used `--config configs/evaluate.yaml`
+per documented commands, so `test_roots`/`li_event_threshold`/`img_size`
+*should* match — worth an explicit confirmation, not just an assumption,
+before trusting either number.
+**Not safe to report either model as "winning" in the paper until this
+is resolved one way or the other.**
+
 ---
 
 ## G. Open items that would strengthen the paper if resolved (cross-ref PAPER_TODO.md)
