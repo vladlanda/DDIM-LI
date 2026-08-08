@@ -420,18 +420,59 @@ before any final numbers, not glossed over.
 computed FSS at `scale=1` (pointwise, no spatial tolerance) — extended
 to the same multi-scale `[1,2,4,8,16,32]` pixel neighbourhoods
 `evaluate.py` already uses for the main model (`baseline_cnn_fss_vs_scale.png`,
-matching layout). **If hypothesis 2 is correct, the CNN's advantage
-should shrink or reverse as spatial tolerance increases; if the CNN
-stays ahead even at large neighbourhood scales, that's evidence for a
-genuine baseline advantage, not a scoring artifact, and needs a
-different explanation** (possibly still the training-recipe items in
-C6/C7, or something not yet identified).
+matching layout).
 **Also unverified:** both evaluations used `--config configs/evaluate.yaml`
 per documented commands, so `test_roots`/`li_event_threshold`/`img_size`
 *should* match — worth an explicit confirmation, not just an assumption,
 before trusting either number.
+
+**Update: FSS-vs-scale results in, via `compare_diffusion_vs_cnn_fss.py`.
+Picture is MORE NUANCED than either hypothesis alone — partial support
+for #2, but a large piece of the gap is scale-INVARIANT, which #2 alone
+cannot explain:**
+  - **p>0.5 (majority vote, matches #2's prediction):** CNN's small
+    edge at 12km (-0.011) shrinks steadily and REVERSES to a diffusion
+    advantage by 260km (+0.018). Textbook double-penalty signature.
+  - **p>0.3:** CNN's edge shrinks with scale (-0.033 → -0.017) but
+    never reverses within the tested range. Partial support.
+  - **p>0.1 (loose threshold):** CNN's edge is large (~-0.15) and
+    **essentially flat across every scale from 12km to 260km** — a
+    scale-invariant gap is NOT what a positional/double-penalty problem
+    predicts (that should shrink with spatial tolerance at every
+    threshold, not just some). This points at a coverage/calibration
+    difference, not a positional one, specifically at loose thresholds.
+**New, more specific hypothesis (#3), motivated by the p>0.1 pattern:**
+with `n_members=10`, thresholding at exactly p=0.1/0.3/0.5 corresponds
+to exactly "≥1/10", "≥3/10", "≥5/10" members agreeing — p>0.1 is a
+generous, union-like criterion (any single one of 10 stochastic
+realizations firing counts as positive), which could inflate the
+diffusion model's predicted-positive AREA well beyond the true event
+area, independent of position. That inflation would hurt FSS by a
+similar amount at every scale (matching the flat pattern), while p>0.5
+(majority vote) is far less prone to this and behaves as #2 predicts.
+**Tested directly** with `check_area_fraction_bias.py` — computes
+predicted-vs-true positive-area fraction from data already saved in
+both npz files (`pr_prob_t`/`pr_label_t`), no new diffusion sampling
+run needed. Validated against synthetic data reproducing the
+hypothesized mechanism (union-of-noisy-members inflating low-threshold
+coverage far more than a calibrated classifier) before trusting it —
+produces exactly the expected signature (diffusion's over-coverage
+ratio roughly 2x the CNN's at the loose threshold, both converging
+toward ~1x at strict thresholds). **Not yet run on real data.**
+**If confirmed:** the concrete next test is re-running the diffusion
+evaluation with a larger `--n_members` (e.g. 30-50) — more members
+means "≥1/N" stops being dominated by rare single-member noise and
+should converge toward a more genuine low end of the probability
+distribution, closing the p>0.1 gap specifically if this hypothesis is
+right.
 **Not safe to report either model as "winning" in the paper until this
-is resolved one way or the other.**
+is resolved. If it holds up, the honest framing is genuinely
+interesting for the paper either way: diffusion catches up/wins at
+strict thresholds and larger spatial tolerance (real, literature-
+grounded uncertainty representation), while the CNN's advantage at
+loose thresholds may be substantially explained by ensemble-size
+discretization rather than a deeper modeling deficiency** — worth
+confirming with the n_members re-run before writing either claim.
 
 ---
 
