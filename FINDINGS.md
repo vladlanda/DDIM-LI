@@ -474,6 +474,32 @@ loose thresholds may be substantially explained by ensemble-size
 discretization rather than a deeper modeling deficiency** — worth
 confirming with the n_members re-run before writing either claim.
 
+**Update: n_members=30 re-run done (up from 10). Strong, mechanistically
+clean confirmation of hypothesis #3:**
+  - **Raw PR-AUC gap vs. CNN roughly halved at every lead time**
+    (e.g. +10min: -0.048 -> -0.025; +60min: -0.064 -> -0.033) from
+    tripling ensemble size alone, no model changes.
+  - **FSS at scale=8 (the mid-scale CSV summary column) moved exactly
+    where the mechanism predicts, and nowhere else:** p>0.1 ("≥1/N",
+    the union-like criterion under test) +0.114 absolute FSS; p>0.3
+    +0.016; p>0.5 (majority vote, not expected to depend on N) -0.009
+    (noise-level). A criterion-specific, one-directional improvement
+    exactly tracking which thresholds are theoretically sensitive to
+    ensemble granularity is strong evidence for the mechanism, not
+    just "the model got better."
+  - **Not yet re-checked at n_members=30:** the full multi-scale FSS
+    shape (does the p>0.1 curve just shift up uniformly, or actually
+    recover more at large scale specifically?) via
+    `compare_diffusion_vs_cnn_fss.py`, and whether the area-inflation
+    ratio itself dropped via `check_area_fraction_bias.py` (both need
+    re-running against the new `plot_data.npz`).
+**Action for paper if the remaining checks confirm this:** this
+becomes a genuinely strong, citable methods point — pointwise
+verification metrics (PR-AUC, low-threshold FSS) are sensitive to
+probabilistic-ensemble size in a specific, mechanistically-understood
+way, distinct from genuine model skill; report ensemble size sensitivity
+alongside the headline comparison rather than a single fixed-N number.
+
 ---
 
 ## G. Open items that would strengthen the paper if resolved (cross-ref PAPER_TODO.md)
