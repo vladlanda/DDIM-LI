@@ -487,18 +487,56 @@ clean confirmation of hypothesis #3:**
     exactly tracking which thresholds are theoretically sensitive to
     ensemble granularity is strong evidence for the mechanism, not
     just "the model got better."
-  - **Not yet re-checked at n_members=30:** the full multi-scale FSS
-    shape (does the p>0.1 curve just shift up uniformly, or actually
-    recover more at large scale specifically?) via
-    `compare_diffusion_vs_cnn_fss.py`, and whether the area-inflation
-    ratio itself dropped via `check_area_fraction_bias.py` (both need
-    re-running against the new `plot_data.npz`).
-**Action for paper if the remaining checks confirm this:** this
-becomes a genuinely strong, citable methods point — pointwise
+
+**Update: full multi-scale + area-fraction re-check done at n_members=30
+(via `compare_diffusion_vs_cnn_fss.py` and `check_area_fraction_bias.py`
+against the new `plot_data.npz`). Question now RESOLVED, mechanism
+understood, small residual remains:**
+  - **p>0.3 and p>0.5:** CNN and diffusion now essentially tied across
+    every spatial scale (deltas within ±0.01) — the earlier apparent
+    CNN advantage at these thresholds is gone.
+  - **p>0.1:** gap shrank from -0.153 to **-0.04, still flat across
+    scale** — same signature (coverage, not positional), ~74% smaller,
+    real residual remains.
+  - **p>0.5 got very slightly WORSE for diffusion (not better) as
+    members went 10->30, more so at larger scales** -- at first glance
+    surprising, but the area-fraction data explains it as the SAME
+    mechanism working in the other direction: diffusion's predicted
+    area at p>0.5 dropped from 0.86x to 0.76x of true area as members
+    increased. With few samples, a pixel with true probability just
+    under 50% can cross "≥5/10" by pure sampling luck more easily than
+    with "≥15/30" -- more members suppresses noise-driven threshold-
+    crossing at BOTH ends of the range, which reads as "improvement"
+    at the loose end (spurious coverage there was too high) and
+    "regression" at the strict end (spurious coverage there was also
+    somewhat too high, just less so). One bias-reduction mechanism,
+    not two effects.
+  - **Area-fraction ratios at n=30:** p=0.1 diffusion 2.28x / CNN 1.98x
+    (was 2.64x/1.98x); p=0.3 diffusion 1.24x / CNN 1.12x (was
+    1.37x/1.12x) -- both gaps roughly halved, consistent with the FSS
+    changes.
+**Conclusion:** the original "baseline beats diffusion" result is now
+a well-characterized artifact of small ensemble size in threshold-based
+verification, not a real modeling deficiency, with a small (-0.04),
+same-mechanism residual at the loosest threshold only.
+**Decision (2026-08-11): user is running n_members=50 next** (separate
+`eval_ens_50` output dir) to see whether the residual p>0.1 gap
+continues shrinking with diminishing returns, or plateaus -- outcome
+undetermined as of this entry, will decide further action from result.
+**Action for paper regardless of the n=50 outcome:** this is a
+genuinely strong, citable methods point already — pointwise
 verification metrics (PR-AUC, low-threshold FSS) are sensitive to
 probabilistic-ensemble size in a specific, mechanistically-understood
-way, distinct from genuine model skill; report ensemble size sensitivity
-alongside the headline comparison rather than a single fixed-N number.
+way, distinct from genuine model skill; report ensemble-size
+sensitivity alongside the headline comparison rather than a single
+fixed-N number.
+**Separate, higher-priority implication (see PAPER_TODO.md):** this
+was discovered via the CNN-baseline diagnostic, but it applies to the
+project's ESTABLISHED HEADLINE NUMBERS too (PR-AUC 0.819->0.589, and
+the bootstrap CI margins vs. persistence/pysteps) — all computed at
+the same `n_members=10` that just cost ~2-3 PR-AUC points for free.
+Those may need regenerating at a larger n_members before being
+reported as final.
 
 ---
 

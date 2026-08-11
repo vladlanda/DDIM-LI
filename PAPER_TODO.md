@@ -51,6 +51,22 @@ with margin growing from +4.6% to +50.9%.
 
 ## Phase 2 — Close reviewer-critical gaps (not blocked by Phase 1)
 
+- [ ] **NEW, HIGH PRIORITY — n_members sensitivity affects ALL headline
+      numbers, not just the CNN baseline comparison.** Discovered while
+      diagnosing FINDINGS.md F4 (CNN baseline vs diffusion model FSS/
+      PR-AUC): the established headline PR-AUC (0.819->0.589) and the
+      bootstrap CI margins vs. persistence/pysteps were ALL computed at
+      `n_members=10`. Re-running at `n_members=30` alone raised PR-AUC
+      by ~0.02-0.03 at every lead time, for free, no retraining — a
+      real, mechanistically-understood effect (small ensembles bias
+      threshold-based metrics), not noise. **User is running
+      `n_members=50` next** (separate `eval_ens_50` output dir) to check
+      for diminishing returns before deciding. Once settled: rerun
+      `bootstrap_pr_auc_ci.py` at the chosen `n_members` for the FINAL
+      vs.-persistence/pysteps significance numbers before they're
+      reported anywhere as final — the current ones likely understate
+      the model's real margin. **Owner: user (GPU), blocks: final
+      headline numbers in Phase 3/4, but not other Phase 2 items.**
 - [x] Baseline beyond persistence — IMPLEMENTED. Optical-flow (pySTEPS-
       style semi-Lagrangian extrapolation) baseline, native implementation
       (Farneback dense flow + cv2.remap backward advection, no pysteps
