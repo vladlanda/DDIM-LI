@@ -5,3 +5,7 @@ datasets
 .venv
 wandb
 outputs
+
+baseline_cnn
+pysteps_ir
+pysteps_li

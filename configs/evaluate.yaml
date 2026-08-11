@@ -16,12 +16,12 @@ test_roots:
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_3
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_4
 
-output_dir:   outputs/nature_256_T36_ir_li_only/eval
+output_dir:   outputs/nature_256_T36_ir_li_only/eval_ens_30
 
 # ----------------------------------------------------------
 # Ensemble sampling
 # ----------------------------------------------------------
-n_members:    10
+n_members:    30
 cfg_scale:    1.5
 num_steps:    20
 S_churn:      60.0
