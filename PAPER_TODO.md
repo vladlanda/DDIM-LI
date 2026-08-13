@@ -19,9 +19,9 @@ subject journal — where Song et al. 2023 was published).
 evaluated at `n_members=50` (see Phase 2 / FINDINGS.md F4 — n_members=10
 measurably understated performance, now resolved and finalized).
 PR-AUC 0.846 → 0.631 (+10 to +60min), beats fresh persistence baseline
-with margin growing from +8.1% to +61.6%. All four baseline comparisons
-(persistence, pysteps_li, pysteps_ir, CNN) are sequence-level bootstrap-
-CI significant at every lead — see FINDINGS.md B1.
+with margin growing from +8.1% to +61.6%. All five baseline comparisons
+(persistence, pysteps_li, pysteps_ir, CNN, LightGBM) are sequence-level
+bootstrap-CI significant at every lead — see FINDINGS.md B1.
 
 ---
 
@@ -181,8 +181,9 @@ CI significant at every lead — see FINDINGS.md B1.
           --epochs 150 --output_dir baseline_cnn/outputs/run1
       ```
 
-- [ ] LightGBM baseline (`baseline_lightgbm/`) — SCAFFOLDED, not yet run
-      on real data. Scope decision: LightGBM only (not also XGBoost —
+- [x] LightGBM baseline (`baseline_lightgbm/`) — COMPLETE: trained,
+      evaluated, and bootstrap-CI-significant results locked in.
+      Scope decision: LightGBM only (not also XGBoost —
       both are gradient-boosted trees, building both adds tuning burden
       without additional scientific insight). Trained/evaluated AT OUR
       OWN task resolution (4km/10min, pixel-exact), NOT a literal
@@ -245,9 +246,11 @@ CI significant at every lead — see FINDINGS.md B1.
       explanation (matched training objective alone, per LightGBM,
       isn't enough to reproduce the CNN's narrow edge — matched raw
       information access, which only the CNN has, is what mattered).**
-      **Still to do:** run through `bootstrap_pr_auc_ci.py` (command
-      above, `--baseline lightgbm:...`) for the final significance
-      numbers — point estimates only so far.
+      **Still to do (final significance numbers now done — see
+      FINDINGS.md B1):** ~~run through `bootstrap_pr_auc_ci.py`~~ DONE.
+      All 6 leads significant vs. model, growing margin +0.018→+0.185,
+      same shape as physical baselines. LightGBM baseline work is now
+      complete pending manuscript writeup.
 
 - [ ] Loss-term ablation, scoped down (full loss vs. denoising-only, not
       a full factorial grid). Lower priority than the CNN/LightGBM

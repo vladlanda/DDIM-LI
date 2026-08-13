@@ -47,35 +47,49 @@ test-period character, drove the earlier degraded numbers.
 
 ## B. Statistical rigor — FINALIZED, applied to the final (n_members=50) numbers
 
-### B1. Sequence-level bootstrap CI — CONFIRMED, FINAL, all four comparisons significant at every lead
-All 24 comparisons (4 baselines × 6 leads) are statistically significant
+### B1. Sequence-level bootstrap CI — CONFIRMED, FINAL, all five comparisons significant at every lead
+All 30 comparisons (5 baselines × 6 leads) are statistically significant
 (95% CI excludes zero). n_boot=1000, sequence-level (not pixel-level)
 paired resampling, `n_members=50` (see F4/A1 for why).
   - vs persistence:  +0.063 (+10m) → +0.241 (+60m) — margin GROWS
   - vs pysteps_li:    +0.075 (+10m) → +0.239 (+60m) — margin GROWS
   - vs pysteps_ir:    +0.205 (+10m) → +0.355 (+60m) — margin GROWS
+  - vs lightgbm:      +0.018 (+10m) → +0.185 (+60m) — margin GROWS,
+    same qualitative shape as the three physical baselines (see C8 for
+    why: LightGBM shares the CNN's matched training objective but NOT
+    its matched raw information access, and behaves accordingly)
   - vs cnn baseline:  -0.021 (+10m) → -0.024 (+60m) — margin roughly
     CONSTANT, model behind at every lead (see F4 for the full mechanistic
     explanation: ensemble-size artifact mostly resolved, small genuine
     residual from a training-objective mismatch remains)
-**The CNN comparison's shape is qualitatively different from the other
-three, and that difference is itself informative:** the three physical/
-classical baselines all show margins widening substantially with lead
-time (their extrapolation degrades faster than the model's forecast
-skill does), while the model-vs-CNN gap stays within a narrow
+**The CNN comparison's shape is qualitatively different from all four
+others, and that difference is itself informative:** persistence,
+pysteps_li, pysteps_ir, AND lightgbm all show margins widening
+substantially with lead time (their skill degrades faster than the
+model's does), while the model-vs-CNN gap stays within a narrow
 [-0.021, -0.024] band across the entire 50-minute range tested. A
 roughly lead-time-INDEPENDENT effect is consistent with a fixed
-structural cause (training objective) rather than a lead-time-dependent
-one (positional/motion degradation) — worth stating explicitly in the
-manuscript as a clean empirical signature supporting F4's explanation.
+structural cause (training objective mismatch, given matched
+information access) rather than a lead-time-dependent one
+(positional/motion degradation, or an information-access bottleneck
+that compounds with prediction difficulty like lightgbm's does) —
+worth stating explicitly in the manuscript as a clean empirical
+signature supporting F4's explanation. LightGBM landing with
+persistence/pysteps' GROWING-margin shape rather than the CNN's flat
+one, despite sharing the CNN's pointwise training objective, is
+itself evidence that objective-matching alone doesn't produce the
+CNN's pattern — matched information access is the operative variable
+(see C8).
 CI width scales with baseline reliability/nature: model-vs-pysteps_ir
 has the widest CI (±0.016 @60min vs ±0.011 for persistence), consistent
 with pysteps_ir being the noisiest baseline (fits E3's physical story).
-model-vs-cnn's CI is the tightest of all four (±0.005 @60min, ±0.007
+model-vs-cnn's CI is the tightest of all five (±0.005 @60min, ±0.007
 @10min) — expected, since the CNN baseline is deterministic (no
 ensemble-sampling variance contributed from that side of the paired
-comparison, unlike the three baselines being compared against a
-50-member diffusion ensemble on the model side too).
+comparison, unlike the other baselines being compared against a
+50-member diffusion ensemble on the model side too). model-vs-lightgbm
+is the second-tightest (±0.010 @60min, ±0.004 @10min) — same reason,
+LightGBM is also a deterministic (non-ensemble) baseline.
 **Figure:** this is the table/figure that should anchor the Results
 section — model PR-AUC with CI, alongside all baselines with their
 deltas and significance markers. Likely a combined plot (PR-AUC vs
