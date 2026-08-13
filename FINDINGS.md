@@ -301,16 +301,45 @@ asserting on the actual output filenames, not just that files existed.
 structure) specifically so `bootstrap_pr_auc_ci.py` and
 `compare_diffusion_vs_cnn_fss.py`-style tooling work against it via
 `--baseline lightgbm:...` with no new comparison code needed.
-**Falsifiable prediction for when this actually runs** (see
-`manuscript/reviewer_premortem_cnn_lightgbm_baselines.md` Q7): if F4's
-mechanism (pointwise-loss-trained models get a small, lead-time-flat
-verification edge that shrinks under spatial tolerance) is a general
-property of directly-optimized deterministic baselines and not
-CNN-specific, LightGBM should show the same qualitative pattern.
-Confirmed replication strengthens F4; a genuinely different pattern
-(large, growing, or spatial-tolerance-robust LightGBM advantage) would
-be a real anomaly requiring new investigation, not something to
-force-fit into the existing explanation.
+
+**RESULT (first real run, PR-AUC): the falsifiable prediction did NOT
+hold — treated as a genuine, clarifying anomaly, not force-fit into F4,
+per the pre-mortem's own instructions for this outcome.**
+LightGBM: 0.828→0.446 (+10m→+60m). Diffusion model (n=50): 0.846→0.631.
+Unlike the CNN, the diffusion model beats LightGBM at EVERY lead time,
+with a margin that GROWS (+0.018→+0.185) — the same qualitative shape
+as its margin over persistence/pysteps, not the CNN's flat,
+LightGBM-losing pattern. LightGBM does beat all three physical
+baselines by a roughly constant +0.05-0.06, so it's a genuinely useful
+baseline, just not a CNN-tier one. LightGBM's gap behind the CNN itself
+WIDENS with lead time (-0.039→-0.209), the opposite of the CNN's own
+near-constant gap behind the diffusion model.
+**Refined explanation, and it strengthens rather than undermines F4:**
+the variable that actually distinguishes the CNN's near-parity result
+isn't "trained on a pointwise loss" (LightGBM has that too — logloss is
+BCE) — it's INFORMATION ACCESS. The CNN sees the exact same raw
+T_in=36 pixel-grid context as the diffusion model, deliberately matched
+for that reason (C7). LightGBM only ever sees the 18 hand-engineered
+summary features (C8 above) — a severe, lossy compression of that same
+raw data, incapable of recovering whatever fine-grained spatiotemporal
+structure those features don't capture. That bottleneck should worsen
+at longer lead times, since harder prediction problems benefit more
+from rich raw information than fixed summary statistics can supply —
+exactly the growing-margin pattern observed. This makes the CNN's
+result MORE specific and MORE credible, not less: near-parity-with-a-
+narrow-pointwise-edge requires BOTH a matched training objective AND
+matched information access, not just the former. LightGBM has only the
+first property and behaves like a boosted physical baseline as a
+result — a sensible middle tier (physical baselines < LightGBM < CNN ≈
+diffusion), not a second instance of F4's mechanism.
+**Not yet run through bootstrap_pr_auc_ci.py** — point estimates only
+so far; large enough margins that significance is expected, but not
+confirmed with a CI yet. See PAPER_TODO.md for the exact command.
+**Manuscript implication:** this refines the discussion draft and
+reviewer pre-mortem's Q7 answer — LightGBM is a genuine, informative
+contrast case (confirms information-access, not just objective-match,
+is what matters), not a replication of the CNN's specific finding.
+Update both documents accordingly (done — see their own revision notes).
 
 ---
 

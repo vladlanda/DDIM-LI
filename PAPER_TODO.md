@@ -236,13 +236,18 @@ CI significant at every lead — see FINDINGS.md B1.
           --baseline lightgbm:baseline_lightgbm/baseline_lightgbm_pr_curves.npz \
           --label model --dt_min 10 --n_boot 1000
       ```
-      **Expected result, per manuscript/reviewer_premortem_cnn_lightgbm_baselines.md
-      Q7:** if LightGBM shows the same qualitative pattern as the CNN
-      baseline (small, lead-time-flat pointwise edge that shrinks under
-      spatial tolerance — see FINDINGS.md F4), treat that as a
-      confirmatory replication of the mechanism, not a second surprise
-      needing a new explanation. If it doesn't match, treat it as a
-      genuine anomaly worth investigating on its own terms.
+      **Result (first real run, PR-AUC): diffusion model 0.846→0.631
+      beats LightGBM 0.828→0.446 at EVERY lead, margin GROWING
+      (+0.018→+0.185) — same shape as the physical baselines, NOT the
+      CNN's flat/losing pattern. LightGBM does beat all three physical
+      baselines, so it's a real, useful middle-tier baseline. See
+      FINDINGS.md C8 for the full result and the information-access
+      explanation (matched training objective alone, per LightGBM,
+      isn't enough to reproduce the CNN's narrow edge — matched raw
+      information access, which only the CNN has, is what mattered).**
+      **Still to do:** run through `bootstrap_pr_auc_ci.py` (command
+      above, `--baseline lightgbm:...`) for the final significance
+      numbers — point estimates only so far.
 
 - [ ] Loss-term ablation, scoped down (full loss vs. denoising-only, not
       a full factorial grid). Lower priority than the CNN/LightGBM
