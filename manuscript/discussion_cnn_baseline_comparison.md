@@ -1,11 +1,12 @@
 # Discussion draft: why raw pointwise metrics favored the CNN baseline
 
 Status: first draft, unpolished, ready for the user to cut/edit/merge into
-the actual manuscript. Numbers below are from FINDINGS.md F4 (final
-n_members=50 comparison) — re-verify against whatever n_members setting
-ends up being used for the final reported headline numbers before this
-goes in the paper, since the exact figures here are from the n=10/30/50
-sweep, not necessarily the final chosen setting.
+the actual manuscript. **n_members=50 is now the FINAL, locked setting**
+(confirmed via bootstrap CI, see FINDINGS.md B1/F4) — the diagnostic
+numbers in this draft (10/30/50 sweep, area-fraction ratios) describe the
+exploratory process and remain accurate as such, but the paper's actual
+headline PR-AUC (0.846->0.631) and the final statistical confirmation are
+now settled, not pending.
 
 Suggested placement: Discussion section, likely adjacent to (or directly
 citing) the incoherent-displacement finding (E2 in FINDINGS.md — probably
@@ -145,6 +146,22 @@ this decomposition, a probabilistic model's genuine representation of
 forecast uncertainty can appear, misleadingly, as a deficit relative to
 a baseline that is simply better positioned — by construction, not by
 merit — to exploit a pointwise scoring rule.
+
+**Final confirmation.** At our chosen final ensemble size
+(`n_members=50`), sequence-level paired bootstrap confidence intervals
+(n_boot=1000) confirm the residual CNN advantage is real and
+statistically significant at every lead time (−0.021 to −0.024 PR-AUC,
+95% CI excludes zero throughout). Its shape is the more informative
+result: whereas the model's margin over each classical baseline
+(persistence, both optical-flow variants) grows substantially with lead
+time — consistent with faster degradation of extrapolation-based
+forecasts — the model-vs-CNN gap is close to constant across the full
+range tested. A fixed-magnitude, lead-time-independent effect is
+consistent with a structural cause (training-objective mismatch) rather
+than a lead-time-dependent one (motion/positional degradation), and
+distinguishes this comparison empirically from the model's growing
+advantage elsewhere, even though both trace back to the same underlying
+positional uncertainty in the process.
 
 ---
 
