@@ -231,6 +231,22 @@ not a literal reproduction" framing as the CNN baseline (F1/F3, C6/C7),
 since Song et al. 2023's LightGBM operates on a completely different
 resolution/feature set (0.25°/hourly, meteorological+aerosol+GLM
 features) that we don't have.
+**Feature provenance, stated explicitly (user asked directly; this is
+the kind of thing a reviewer will ask too, so the honest answer needs
+to be consistent everywhere, not just in this file):** LightGBM itself
+provides none of this — it's a generic gradient-boosting library with
+zero domain knowledge, every feature is our own code. The 18 features
+are NOT a reproduction of Song et al.'s exact set (we lack their
+aerosol/reanalysis inputs). The general categories used (sliding-window
+temporal stats, trend/finite-difference features, local spatial
+neighbourhood aggregation, time-since-last-event recency) are standard
+practice across nowcasting ML broadly, not novel. Local spatial
+aggregation for satellite-based lightning specifically has apparent
+precedent in Karagiannidis et al. 2016 ("interest fields") — but that
+paper has only been seen referenced secondhand (a search snippet), not
+read directly, so this is a conceptual similarity only, not a
+reproduction of their actual formulas. The specific 18-feature list,
+9x9 window size, and lag choices are this project's own design.
 **18 features** (see features.py's module docstring for full rationale):
 IR temporal stats (now/mean/std/min/max over context, 30min and 2h
 trends — the 2h window deliberately connects to E4's convective-memory-

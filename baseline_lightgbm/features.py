@@ -27,6 +27,29 @@ including absolute coordinates would let the model memorize
 region-specific geography rather than learn a transferable local
 storm-behaviour signal, undermining that check before it's even run.
 
+FEATURE PROVENANCE, stated explicitly (a reviewer will ask, so this
+should be easy to answer accurately): the 18 features below are NOT
+provided by LightGBM (a generic gradient-boosting library with zero
+domain knowledge -- every feature here is our own code) and are NOT a
+reproduction of Song et al. 2023's exact feature set (we don't have
+their aerosol/reanalysis inputs, so this can't be, and isn't claimed to
+be). The general CATEGORIES used -- sliding-window temporal summary
+statistics, finite-difference/trend features, local spatial
+neighbourhood aggregation, time-since-last-event recency -- are
+standard, widely-used patterns across time-series/nowcasting ML
+generally, not novel. Local spatial aggregation from satellite imagery
+specifically for lightning prediction has apparent precedent in
+Karagiannidis et al. (2016, "interest fields") -- but that paper has
+only been seen referenced secondhand (a search snippet while
+researching Song et al.), not read directly, so this is a conceptual
+similarity (local spatial context as engineered features), NOT a
+reproduction of their specific formulas, which are unknown here. The
+exact list of 18 features, the 9x9 window size, and the 30min/2h lag
+choices are this project's own design for this specific baseline. One
+choice has genuine internal grounding: the 2h trend window specifically
+references this project's own E4 finding (convective memory saturates
+around 2h) -- grounded in this project's data, not outside literature.
+
 All functions operate on PHYSICAL-space li (after _li_to_physical) and
 raw normalized ir -- ir doesn't need physical conversion for a
 tree-based model (monotonic transforms don't change what LightGBM can
