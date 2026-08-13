@@ -112,6 +112,28 @@ model's relative advantage emerges precisely where the scoring rule
 stops penalizing positional hedging and starts rewarding calibrated,
 majority-consensus confidence.
 
+This pattern is not unique to our task. Price et al. (2024, GenCast,
+*Nature* 637:84-90) — a diffusion-based ensemble weather model that,
+like ours, predicts residuals via a Karras et al. (2022)-style EDM
+framework — explicitly motivate their generative approach on the same
+grounds: deterministic ML forecast models trained to minimize MSE
+"tend to produce blurry forecasts at longer lead times, which are
+closer to an ensemble mean than to a deterministic NWP forecast," and
+their own deterministic baseline (GraphCast, turned into a perturbed
+ensemble for comparison) is reported to "blur at long lead times due
+to their MSE training objective." Notably, GenCast's deterministic
+baseline is a graph neural network rather than a CNN, reflecting their
+global, unstructured spherical grid — architecturally different from
+our fixed-grid regional CNN baseline, but occupying the same
+methodological role (a directly pointwise-optimized deterministic
+model as the counterpoint to a diffusion model), and exhibiting the
+same qualitative failure mode. That a leading, independently-developed
+system in a related but distinct forecasting domain reports the same
+phenomenon as an expected, foundational motivation for generative
+forecasting — rather than a surprising anomaly — is useful corroboration
+that our explanation is a general property of this model comparison,
+not an artifact specific to lightning nowcasting or our architecture.
+
 **Implication for evaluation practice.** We suggest that comparisons
 between sample-based probabilistic forecasting models and deterministic
 baselines directly optimized for a pointwise loss should report (i)
@@ -128,6 +150,11 @@ merit — to exploit a pointwise scoring rule.
 
 ## Notes / things to check before finalizing
 
+- Add Price et al. 2024 (GenCast) to the bibliography: Price, I. et al.
+  "Probabilistic weather forecasting with machine learning." Nature 637,
+  84-90 (2024). https://doi.org/10.1038/s41586-024-08252-9. Also cite
+  Lam et al. 2023 (GraphCast, Science 382:1416-1421) since GenCast's
+  blurring claim is specifically about GraphCast-Perturbed.
 - Confirm the Metzl et al. 2025 citation format/year (in review vs.
   published by the time this is submitted) — see FINDINGS.md F3.
 - Add Roberts & Lean 2008 to the bibliography if not already there
