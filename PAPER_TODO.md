@@ -15,9 +15,13 @@ Atmospheric Science (our recommendation, curated Nature Portfolio
 subject journal — where Song et al. 2023 was published).
 
 **Current best model:** `outputs/nature_256_T36_ir_li_only` — 2-channel
-(ir105 + li), 790 epochs, trained on the regenerated (clean) dataset.
-PR-AUC 0.819 → 0.589 (+10 to +60min), beats fresh persistence baseline
-with margin growing from +4.6% to +50.9%.
+(ir105 + li), 790 epochs, trained on the regenerated (clean) dataset,
+evaluated at `n_members=50` (see Phase 2 / FINDINGS.md F4 — n_members=10
+measurably understated performance, now resolved and finalized).
+PR-AUC 0.846 → 0.631 (+10 to +60min), beats fresh persistence baseline
+with margin growing from +8.1% to +61.6%. All four baseline comparisons
+(persistence, pysteps_li, pysteps_ir, CNN) are sequence-level bootstrap-
+CI significant at every lead — see FINDINGS.md B1.
 
 ---
 
@@ -51,22 +55,17 @@ with margin growing from +4.6% to +50.9%.
 
 ## Phase 2 — Close reviewer-critical gaps (not blocked by Phase 1)
 
-- [ ] **NEW, HIGH PRIORITY — n_members sensitivity affects ALL headline
-      numbers, not just the CNN baseline comparison.** Discovered while
-      diagnosing FINDINGS.md F4 (CNN baseline vs diffusion model FSS/
-      PR-AUC): the established headline PR-AUC (0.819->0.589) and the
-      bootstrap CI margins vs. persistence/pysteps were ALL computed at
-      `n_members=10`. Re-running at `n_members=30` alone raised PR-AUC
-      by ~0.02-0.03 at every lead time, for free, no retraining — a
-      real, mechanistically-understood effect (small ensembles bias
-      threshold-based metrics), not noise. **User is running
-      `n_members=50` next** (separate `eval_ens_50` output dir) to check
-      for diminishing returns before deciding. Once settled: rerun
-      `bootstrap_pr_auc_ci.py` at the chosen `n_members` for the FINAL
-      vs.-persistence/pysteps significance numbers before they're
-      reported anywhere as final — the current ones likely understate
-      the model's real margin. **Owner: user (GPU), blocks: final
-      headline numbers in Phase 3/4, but not other Phase 2 items.**
+- [x] **n_members sensitivity — RESOLVED.** Discovered while diagnosing
+      FINDINGS.md F4 (CNN baseline vs diffusion model FSS/PR-AUC): the
+      original headline PR-AUC (0.819->0.589) and bootstrap CI margins
+      were computed at undersized `n_members=10`. Swept 10/30/50, found
+      clear diminishing returns (10->30 closed 49% of the gap vs the CNN
+      baseline, 30->50 closed a further 21% of the remainder) and
+      settled on **n_members=50** as final. Reran the full bootstrap CI
+      comparison (`bootstrap_pr_auc_ci.py`, n_boot=1000) at this setting
+      against all four baselines — new FINAL headline numbers: PR-AUC
+      0.846->0.631, all 24 comparisons (4 baselines x 6 leads)
+      significant. See FINDINGS.md A1/A2/B1/F4 for full detail.
 - [x] Baseline beyond persistence — IMPLEMENTED. Optical-flow (pySTEPS-
       style semi-Lagrangian extrapolation) baseline, native implementation
       (Farneback dense flow + cv2.remap backward advection, no pysteps

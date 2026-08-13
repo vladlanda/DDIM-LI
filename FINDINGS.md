@@ -14,21 +14,27 @@ but with a known limitation to state honestly).
 
 ## A. Headline results
 
-### A1. Final model beats fresh persistence, margin GROWS with lead time — CONFIRMED
+### A1. Final model beats fresh persistence, margin GROWS with lead time — CONFIRMED, FINAL (n_members=50)
 2-channel (ir105+li) diffusion model, 790 epochs, clean/regenerated
-dataset. PR-AUC 0.819→0.589 (+10 to +60min) vs. fresh persistence
-0.783→0.391. Margin: +4.6% (+10min) → **+50.9%** (+60min).
+dataset, evaluated at `n_members=50` (see F4 for why this setting was
+chosen — n_members=10 measurably understated performance; 10->30
+closed 49% of a since-explained gap, 30->50 closed a further 21% of
+the remainder, clear diminishing returns beyond this point). PR-AUC
+0.846→0.631 (+10 to +60min) vs. fresh persistence 0.783→0.391.
+Margin: **+8.1%** (+10min) → **+61.6%** (+60min).
 **Figure:** PR-AUC vs lead time, model vs. persistence, with margin
 annotated — likely Figure 1 or 2 of the results section.
 
-### A2. Model beats BOTH optical-flow baselines too, same growing-margin shape — CONFIRMED
+### A2. Model beats BOTH optical-flow baselines too, same growing-margin shape — CONFIRMED, FINAL (n_members=50)
 Adding two pySTEPS-style extrapolation baselines (LI-derived flow,
 IR-derived flow) doesn't change the story: persistence remains the best
-of the three classical baselines at every lead except +60min (near-tie).
-Model margin over the *best* baseline: +4.6% → **+50.3%**.
+of the three classical baselines at every lead except +60min, where
+pysteps_li narrowly overtakes it (0.3921 vs 0.3906 — still a near-tie).
+Model margin over the *best* classical baseline at each lead:
+**+8.1% → +61.0%**.
 **Figure:** four-way PR-AUC comparison (model / persistence / flow_li /
-flow_ir) — stronger version of A1's figure, this is probably the actual
-headline figure once bootstrap CIs are added (see B, pending).
+flow_ir) — stronger version of A1's figure, this is the actual headline
+figure now that bootstrap CIs are finalized (see B1).
 
 ### A3. Fresh persistence ≈ old (stale-data) persistence, within 0.001 at every lead — CONFIRMED
 Validates that the severe coverage bug (see D2) didn't change the *test
@@ -39,25 +45,41 @@ test-period character, drove the earlier degraded numbers.
 
 ---
 
-## B. Statistical rigor (infrastructure built, not yet applied to final numbers)
+## B. Statistical rigor — FINALIZED, applied to the final (n_members=50) numbers
 
-### B1. Sequence-level bootstrap CI — CONFIRMED, applied to the headline comparison
-All 18 comparisons (3 baselines × 6 leads) are statistically significant
-(95% CI excludes zero), and critically, the margin GROWS monotonically
-with lead time against all three baselines simultaneously:
-  - vs persistence:  +0.036 (+10m) → +0.200 (+60m)
-  - vs pysteps_li:    +0.048 (+10m) → +0.199 (+60m)
-  - vs pysteps_ir:    +0.177 (+10m) → +0.315 (+60m)
-This is now a statistically robust, structurally consistent result, not
-just a point-estimate — the strongest form A1/A2 could take. n_boot=1000,
-sequence-level (not pixel-level) paired resampling.
-CI width scales with baseline reliability: model-vs-pysteps_ir has the
-widest CI (±0.025 @60min vs ±0.011 for persistence), consistent with
-pysteps_ir being the noisiest baseline (fits E3's physical story).
+### B1. Sequence-level bootstrap CI — CONFIRMED, FINAL, all four comparisons significant at every lead
+All 24 comparisons (4 baselines × 6 leads) are statistically significant
+(95% CI excludes zero). n_boot=1000, sequence-level (not pixel-level)
+paired resampling, `n_members=50` (see F4/A1 for why).
+  - vs persistence:  +0.063 (+10m) → +0.241 (+60m) — margin GROWS
+  - vs pysteps_li:    +0.075 (+10m) → +0.239 (+60m) — margin GROWS
+  - vs pysteps_ir:    +0.205 (+10m) → +0.355 (+60m) — margin GROWS
+  - vs cnn baseline:  -0.021 (+10m) → -0.024 (+60m) — margin roughly
+    CONSTANT, model behind at every lead (see F4 for the full mechanistic
+    explanation: ensemble-size artifact mostly resolved, small genuine
+    residual from a training-objective mismatch remains)
+**The CNN comparison's shape is qualitatively different from the other
+three, and that difference is itself informative:** the three physical/
+classical baselines all show margins widening substantially with lead
+time (their extrapolation degrades faster than the model's forecast
+skill does), while the model-vs-CNN gap stays within a narrow
+[-0.021, -0.024] band across the entire 50-minute range tested. A
+roughly lead-time-INDEPENDENT effect is consistent with a fixed
+structural cause (training objective) rather than a lead-time-dependent
+one (positional/motion degradation) — worth stating explicitly in the
+manuscript as a clean empirical signature supporting F4's explanation.
+CI width scales with baseline reliability/nature: model-vs-pysteps_ir
+has the widest CI (±0.016 @60min vs ±0.011 for persistence), consistent
+with pysteps_ir being the noisiest baseline (fits E3's physical story).
+model-vs-cnn's CI is the tightest of all four (±0.005 @60min, ±0.007
+@10min) — expected, since the CNN baseline is deterministic (no
+ensemble-sampling variance contributed from that side of the paired
+comparison, unlike the three baselines being compared against a
+50-member diffusion ensemble on the model side too).
 **Figure:** this is the table/figure that should anchor the Results
-section — model PR-AUC with CI, alongside all three baselines with
-their deltas and significance markers. Likely a combined plot (PR-AUC
-vs lead, all four curves, shaded CI bands) rather than a bare table.
+section — model PR-AUC with CI, alongside all baselines with their
+deltas and significance markers. Likely a combined plot (PR-AUC vs
+lead, all curves, shaded CI bands) rather than a bare table.
 
 ---
 
@@ -592,6 +614,26 @@ Two distinct, now well-quantified causes, not one:
      "sharp but uncertain" should beat "blurred but confident."
 **Manuscript status:** promoted from a caveat to a genuine discussion-
 section contribution — draft prose in `manuscript/discussion_cnn_baseline_comparison.md`.
+
+**FINAL, statistically validated (not just point-estimate) confirmation
+via `bootstrap_pr_auc_ci.py` at `n_members=50`, sequence-level paired
+bootstrap, n_boot=1000 (see B1 for the full table):** the residual CNN
+advantage IS real and statistically significant at every lead time
+(-0.021 to -0.024, 95% CI excludes zero throughout, tight CI ±0.005-0.007
+given the CNN's deterministic/no-sampling-variance side of the pairing)
+— this is not noise that a larger bootstrap sample would wash out.
+**But its SHAPE is the more important result:** unlike the model's
+margin over persistence/pysteps_li/pysteps_ir, which all GROW
+substantially with lead time (physical/classical extrapolation degrades
+faster than the model), the model-vs-CNN gap is roughly CONSTANT across
+the full 50-minute range tested. A fixed-magnitude, lead-time-
+independent effect is exactly what the structural explanation (#2
+above — training-objective mismatch) predicts, and is hard to explain
+under a purely positional/motion-degradation account (which would be
+expected to interact with lead time the way the other three
+comparisons do). This distinguishes F4's mechanism empirically from
+E1/E2's lead-time-dependent error growth, even though both ultimately
+trace back to the same genuine positional uncertainty in the process.
 
 ---
 
