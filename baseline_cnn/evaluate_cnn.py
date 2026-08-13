@@ -128,7 +128,8 @@ def parse_args():
 
 def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
                 pr_curves, auc_by_step, cal_curves, fss_prob_thresholds,
-                fss_scales, pixel_size_km):
+                fss_scales, pixel_size_km, filename_prefix="baseline_cnn",
+                display_name="CNN Baseline"):
     """Save journal-style white-theme PNGs for the CNN baseline, matching
     evaluate.py's plotting theme/palette (same rcParams, same turbo
     lead-time colormap, same axis-styling helper) so figures compare
@@ -212,9 +213,9 @@ def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
     for ax in [ax_csi, ax_pod, ax_far]:
         ax.legend(fontsize=8, framealpha=0.9)
 
-    fig1.suptitle("CNN Baseline — Lightning Detection Skill", fontsize=12, fontweight="bold")
+    fig1.suptitle(f"{display_name} — Lightning Detection Skill", fontsize=12, fontweight="bold")
     fig1.tight_layout()
-    skill_path = os.path.join(output_dir, "baseline_cnn_skill_curves.png")
+    skill_path = os.path.join(output_dir, f"{filename_prefix}_skill_curves.png")
     fig1.savefig(skill_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig1)
     logger.info(f"Skill curves    -> {skill_path}")
@@ -226,7 +227,7 @@ def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
         ax2.plot(rec, prec, color=lt_colors[t], linewidth=1.2, alpha=0.9)
     ax2.set_xlabel("Recall (POD)")
     ax2.set_ylabel("Precision (1 \u2212 FAR)")
-    ax2.set_title("CNN Baseline \u2014 Precision-Recall Curves", fontweight="bold")
+    ax2.set_title(f"{display_name} \u2014 Precision-Recall Curves", fontweight="bold")
     ax2.set_xlim(0, 1); ax2.set_ylim(0, 1)
     _styled_ax(ax2)
     handles_pr = [
@@ -237,7 +238,7 @@ def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
     ax2.legend(handles=handles_pr, fontsize=7.5, ncol=2, loc="lower left",
               framealpha=0.9, handlelength=1.4, columnspacing=0.8, handletextpad=0.4)
     fig2.tight_layout()
-    pr_path = os.path.join(output_dir, "baseline_cnn_precision_recall.png")
+    pr_path = os.path.join(output_dir, f"{filename_prefix}_precision_recall.png")
     fig2.savefig(pr_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig2)
     logger.info(f"PR curves       -> {pr_path}")
@@ -253,12 +254,12 @@ def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
                  marker="o", markersize=3, alpha=0.9)
     ax3.set_xlabel("Mean Predicted Probability")
     ax3.set_ylabel("Observed Frequency")
-    ax3.set_title("CNN Baseline \u2014 Reliability Diagram", fontweight="bold")
+    ax3.set_title(f"{display_name} \u2014 Reliability Diagram", fontweight="bold")
     ax3.set_xlim(0, 1); ax3.set_ylim(0, 1)
     _styled_ax(ax3)
     _lt_legend(ax3, sorted(cal_curves.keys()), loc="upper left", extra_handles=[diag_line])
     fig3.tight_layout()
-    cal_path = os.path.join(output_dir, "baseline_cnn_calibration.png")
+    cal_path = os.path.join(output_dir, f"{filename_prefix}_calibration.png")
     fig3.savefig(cal_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig3)
     logger.info(f"Calibration     -> {cal_path}")
@@ -309,10 +310,10 @@ def _make_plots(output_dir, T_out, dt_min, lead_times, per_step,
         ax_bot.legend(fontsize=9)
         _styled_ax(ax_bot)
 
-    fig4.suptitle(f"CNN Baseline — FSS vs Spatial Scale — {T_out} lead times",
+    fig4.suptitle(f"{display_name} — FSS vs Spatial Scale — {T_out} lead times",
                  fontsize=12, fontweight="bold")
     fig4.tight_layout()
-    fss_path = os.path.join(output_dir, "baseline_cnn_fss_vs_scale.png")
+    fss_path = os.path.join(output_dir, f"{filename_prefix}_fss_vs_scale.png")
     fig4.savefig(fss_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig4)
     logger.info(f"FSS vs scale    -> {fss_path}")

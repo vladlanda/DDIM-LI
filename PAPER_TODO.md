@@ -181,18 +181,68 @@ CI significant at every lead — see FINDINGS.md B1.
           --epochs 150 --output_dir baseline_cnn/outputs/run1
       ```
 
-- [ ] LightGBM baseline (`baseline_lightgbm/`) — NOT YET STARTED. Scope
-      decision made: LightGBM only (not also XGBoost — both are gradient-
-      boosted trees, building both adds tuning burden without additional
-      scientific insight). Trained/evaluated AT OUR OWN task resolution
-      (4km/10min, pixel-exact), NOT a literal reproduction of Song et
-      al.'s 0.25°/hourly protocol (that would reopen the base-rate/
-      resolution non-comparability problem already flagged in F1).
-      Framing: "a gradient-boosted-tree baseline in the methodological
-      spirit of the most relevant prior npj publication, evaluated on
-      our task" — legitimate and citable without overclaiming a direct
-      number-to-number comparison with their 0.727.
-      **Owner: me next.**
+- [ ] LightGBM baseline (`baseline_lightgbm/`) — SCAFFOLDED, not yet run
+      on real data. Scope decision: LightGBM only (not also XGBoost —
+      both are gradient-boosted trees, building both adds tuning burden
+      without additional scientific insight). Trained/evaluated AT OUR
+      OWN task resolution (4km/10min, pixel-exact), NOT a literal
+      reproduction of Song et al.'s 0.25°/hourly protocol (that would
+      reopen the base-rate/resolution non-comparability problem already
+      flagged in F1). Framing: "a gradient-boosted-tree baseline in the
+      methodological spirit of the most relevant prior npj publication,
+      evaluated on our task" — legitimate and citable without
+      overclaiming a direct number-to-number comparison with their 0.727.
+      **What's built:** `features.py` (18 hand-verified, vectorized
+      features: IR temporal/spatial stats, LI activity/recency/local-
+      density stats, lead_idx as a feature for single-model amortization
+      across lead times — same reasoning as the CNN baseline's C7),
+      `train_lightgbm.py` (reuses `dataset.py`'s `make_dataloaders`
+      directly — same train/val split, stats, channels as everywhere
+      else; `is_unbalance=True` for class imbalance, not manual
+      oversampling), `evaluate_lightgbm.py` (identical output schema to
+      `evaluate_cnn.py` — same npz/CSV structure, works with
+      `bootstrap_pr_auc_ci.py` and `compare_diffusion_vs_cnn_fss.py`
+      unmodified via `--baseline lightgbm:...`). Reuses
+      `evaluate_cnn.py`'s `_make_plots`/`_li_to_physical` directly rather
+      than duplicating ~250 lines (that function was parameterized with
+      `filename_prefix`/`display_name` specifically to support this
+      reuse without mislabeling LightGBM's own plots as "CNN Baseline").
+      Validated via synthetic data throughout (hand-verified feature
+      values against constructed known scenarios, full train->evaluate
+      pipeline run end-to-end with mocked data loaders) before trusting
+      any of it, per this project's validate-before-trusting practice.
+      Caught and fixed two real bugs during that validation: a 6x
+      redundant spatial-filter computation per sequence (refactored into
+      a two-step compute-once/reuse-per-lead path), and a full-image
+      validation-set default that would have needed ~10-20GB of RAM
+      (fixed with a separate, bounded `--val_pixels_per_image_lead`).
+      **Owner: user (GPU/data access) — train, then evaluate:**
+      ```
+      python baseline_lightgbm/train_lightgbm.py \
+          --config configs/default.yaml \
+          --output_dir baseline_lightgbm/outputs/run1
+
+      python baseline_lightgbm/evaluate_lightgbm.py \
+          --config configs/evaluate.yaml \
+          --model_dir baseline_lightgbm/outputs/run1 \
+          --output_dir baseline_lightgbm
+
+      python bootstrap_pr_auc_ci.py \
+          --npz outputs/nature_256_T36_ir_li_only/eval_ens_50/plot_data.npz \
+          --baseline persistence:outputs/persistence_baseline/persistence_pr_curves.npz \
+          --baseline pysteps_li:pysteps_li/optical_flow_li_pr_curves.npz \
+          --baseline pysteps_ir:pysteps_ir/optical_flow_ir_pr_curves.npz \
+          --baseline cnn:baseline_cnn/baseline_cnn_pr_curves.npz \
+          --baseline lightgbm:baseline_lightgbm/baseline_lightgbm_pr_curves.npz \
+          --label model --dt_min 10 --n_boot 1000
+      ```
+      **Expected result, per manuscript/reviewer_premortem_cnn_lightgbm_baselines.md
+      Q7:** if LightGBM shows the same qualitative pattern as the CNN
+      baseline (small, lead-time-flat pointwise edge that shrinks under
+      spatial tolerance — see FINDINGS.md F4), treat that as a
+      confirmatory replication of the mechanism, not a second surprise
+      needing a new explanation. If it doesn't match, treat it as a
+      genuine anomaly worth investigating on its own terms.
 
 - [ ] Loss-term ablation, scoped down (full loss vs. denoising-only, not
       a full factorial grid). Lower priority than the CNN/LightGBM

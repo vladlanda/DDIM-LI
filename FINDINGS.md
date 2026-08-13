@@ -224,6 +224,78 @@ sharp reviewer to wonder why the setup doesn't match Metzl's exactly —
 this is a case where explaining the choice is a strength, not a
 defensive footnote.
 
+### C8. LightGBM baseline scaffolded — feature design and consistency choices, PENDING (not yet run on real data)
+Built `baseline_lightgbm/` (features.py, train_lightgbm.py,
+evaluate_lightgbm.py), following the same "spirit of the literature,
+not a literal reproduction" framing as the CNN baseline (F1/F3, C6/C7),
+since Song et al. 2023's LightGBM operates on a completely different
+resolution/feature set (0.25°/hourly, meteorological+aerosol+GLM
+features) that we don't have.
+**18 features** (see features.py's module docstring for full rationale):
+IR temporal stats (now/mean/std/min/max over context, 30min and 2h
+trends — the 2h window deliberately connects to E4's convective-memory-
+saturates-at-~2h finding) and local 9x9 spatial neighbourhood stats;
+LI activity/recency stats (current/recent/count/fraction active,
+time-since-last-active, computed in PHYSICAL space at the same
+li_event_threshold the label itself uses — using a different
+"active" definition for historical-context features than for the
+label would have been a real, confusing inconsistency) and local 9x9
+neighbourhood stats; plus lead_idx, enabling one amortized model across
+all 6 lead times (same reasoning as C7's lead-time-conditioning
+argument for the CNN baseline — internal consistency across our own
+baselines matters more than matching any one external protocol).
+Deliberately EXCLUDES absolute pixel position — every feature is
+translation-invariant, matching the CNN/diffusion model's fully-
+convolutional equivariance, and preserving validity of the still-open
+held-out-region generalization check (PAPER_TODO.md) — absolute
+coordinates would let a tree-based model memorize training-region
+geography in a way that wouldn't transfer, silently undermining that
+future check.
+**Class imbalance:** LightGBM's native `is_unbalance=True`, not manual
+pixel oversampling — the idiomatic approach for this model class, kept
+deliberately distinct from the CNN baseline's `WeightedRandomSampler`
+mechanism rather than forcing consistency where the two model classes'
+standard practices genuinely differ (unlike T_in/lead-amortization,
+where holding structure constant was the right call — imbalance
+handling isn't part of what's being compared here).
+**Two real bugs caught during synthetic-data validation, before this
+touched real data:** (1) both training and evaluation loop over 6 lead
+times per sequence, but the initial feature-extraction API recomputed
+the expensive spatial-filter features from scratch every call despite
+them not depending on lead_idx — 6x redundant work, fixed by splitting
+into a compute-once-per-sequence / reuse-per-lead two-step API,
+verified numerically identical to the original single-step version
+before trusting the refactor. (2) the initial validation-set design
+used full-image (every pixel) extraction, reasoned as giving an
+"unbiased early-stopping signal" — but at realistic defaults (256x256
+images, T_out=6, ~hundreds of validation sequences) this would have
+needed ~10-20GB of RAM for the validation matrix alone, caught by
+actually computing the expected size rather than assuming the design
+was fine, before it could fail on the user's machine hours into a run.
+Fixed with a separate, bounded `--val_pixels_per_image_lead` (subsampled
+like training, just larger, for a more precise signal without being
+unbounded).
+**Reuses `evaluate_cnn.py`'s `_make_plots`/`_li_to_physical` directly**
+(imported, not duplicated) — required parameterizing `_make_plots` with
+`filename_prefix`/`display_name` args (previously hardcoded to
+"baseline_cnn"/"CNN Baseline"), since reusing it verbatim would have
+mislabeled every LightGBM plot — caught by an end-to-end synthetic test
+asserting on the actual output filenames, not just that files existed.
+**Output schema identical to `evaluate_cnn.py`'s** (same npz/CSV
+structure) specifically so `bootstrap_pr_auc_ci.py` and
+`compare_diffusion_vs_cnn_fss.py`-style tooling work against it via
+`--baseline lightgbm:...` with no new comparison code needed.
+**Falsifiable prediction for when this actually runs** (see
+`manuscript/reviewer_premortem_cnn_lightgbm_baselines.md` Q7): if F4's
+mechanism (pointwise-loss-trained models get a small, lead-time-flat
+verification edge that shrinks under spatial tolerance) is a general
+property of directly-optimized deterministic baselines and not
+CNN-specific, LightGBM should show the same qualitative pattern.
+Confirmed replication strengthens F4; a genuinely different pattern
+(large, growing, or spatial-tolerance-robust LightGBM advantage) would
+be a real anomaly requiring new investigation, not something to
+force-fit into the existing explanation.
+
 ---
 
 ## D. Data pipeline integrity (methods/reproducibility, not scientific findings per se)
