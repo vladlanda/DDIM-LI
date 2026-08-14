@@ -20,10 +20,13 @@ FINDINGS.md F3b/F4 for the reasoning):**
    (FINDINGS.md F4: CNN/LightGBM/ensemble-size/spatial-tolerance
    analysis, corroborated by GenCast) as a first-class contribution,
    not a secondary methods detail. Direct subfield precedent: Leinonen
-   et al. 2022 (deep learning lightning nowcasting, Switzerland)
-   published there. AMS's "Weather and Forecasting" (where LightningCast/
-   Cintineo et al. 2022 was published) is a reasonable alternative in
-   the same family if AIES's ML-methods framing doesn't fit as well as
+   et al. 2022 AND Metzl et al. 2025 (F3 — confirmed published, not
+   "in review" as first found; DOI 10.1175/AIES-D-25-0035.1) BOTH
+   published there — two of our closest comparator papers in the same
+   venue is a real signal, not a coincidence. AMS's "Weather and
+   Forecasting" (where LightningCast/Cintineo et al. 2022 was
+   published) is a reasonable alternative in the same family if AIES's
+   ML-methods framing doesn't fit as well as
    expected once drafting starts.
 3. **IEEE TGRS** — demoted from "parallel" to a secondary option.
    Reasoning: still a legitimate rigorous venue and would likely

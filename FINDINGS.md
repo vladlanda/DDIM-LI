@@ -519,7 +519,16 @@ Discussion/Related Work — our finding is independently consistent with
 theirs despite different platforms, using a considerably more rigorous
 methodology (pre-registered, bootstrap-CI'd vs. their ad-hoc ablation).
 
-### F3. Metzl et al. 2025 (DLR/DWD, in review) — closest comparator paper found, changes Phase 3 priorities
+### F3. Metzl et al. 2025 (DLR/DWD) — closest comparator paper found, changes Phase 3 priorities
+**Publication status update:** now published (was "in review" at time of
+discovery) — Metzl, C. et al. "Physical Scales Matter: The Role of
+Receptive Fields and Advection in Satellite-Based Thunderstorm
+Nowcasting with Convolutional Neural Networks." Artificial Intelligence
+for the Earth Systems 4(4), 2025. DOI: 10.1175/AIES-D-25-0035.1
+(verified). Also relevant to journal-target discussion: this makes TWO
+of our closest comparator papers (this one and Leinonen et al. 2022)
+both published in AIES — see PAPER_TODO.md's updated journal-target
+section.
 Near-identical study: satellite (MSG/SEVIRI) + lightning (LINET), CNN
 (ResU-Net) segmentation over the Alps region. Directly relevant findings:
   - They advect lightning using a DENSER companion channel (water vapor)
