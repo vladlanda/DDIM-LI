@@ -547,6 +547,44 @@ baseline alongside physical baselines is a real gap in our current
 baseline set (persistence + 2 optical-flow variants, no trained CNN).
 See PAPER_TODO.md Phase 3 for the concrete plan.
 
+### F3b. Dai et al. 2025 (PNAS) — "DDMS", diffusion model + geostationary satellite convection nowcasting — MUST CITE, clearly differentiated
+Found while researching journal targets. Kuai Dai et al., "Four-hour
+thunderstorm nowcasting using a deep diffusion model for satellite
+data" (DDMS), Proc. Natl. Acad. Sci. 122(51):e2517520122 (2025;
+arXiv since April 2024). Genuinely close in method (diffusion model,
+geostationary satellite brightness-temperature input, convective
+nowcasting) — a reviewer at essentially any target journal will likely
+know this paper. NOT a scoop, but MUST be cited and explicitly
+differentiated in the manuscript's related-work/intro, not just
+footnoted:
+  - **Target variable differs:** DDMS predicts general convective cloud
+    evolution (brightness-temperature fields / storm growth-decay).
+    Ours predicts lightning occurrence specifically — a more targeted,
+    directly hazard-relevant output.
+  - **Scope differs:** DDMS is near-global/planetary (~20,000,000 km²,
+    FengYun-4A), 4h lead time, 15min/4km resolution. Ours is regional
+    (Central Africa), 1h lead time (T_out=6 @ 10min), 4km resolution —
+    a deliberately narrower, deeper regional study, not a lesser one;
+    npj Clim Atmos Sci explicitly lists "regional studies... new
+    understanding of a particular locality" as a focus area (see F-
+    section journal-target discussion / PAPER_TODO.md).
+  - **Contribution type differs:** DDMS's abstract frames it as a
+    systems/engineering contribution (broader coverage, longer lead
+    time, fast inference, transferable to other satellites). No
+    apparent analog to our E2 finding (a specific mechanistic claim
+    about lightning displacement being incoherent, independently
+    confirmed 3 ways) or to our baseline-verification-methodology
+    contribution (F4 — CNN/LightGBM/ensemble-size/spatial-tolerance
+    analysis, corroborated by GenCast). Only skimmed via search
+    snippets/abstract, not read in full — full read needed before
+    the related-work paragraph is drafted, to avoid mischaracterizing
+    their method or missing a closer overlap than the abstract suggests.
+**Action for paper:** cite in Introduction/related work with an
+explicit 2-3 sentence differentiation paragraph along the lines above,
+not just a passing mention — the closer a related paper, the more a
+reviewer will scrutinize whether the differentiation is real or
+hand-waved.
+
 ### F4. Why raw pointwise metrics initially favored the CNN baseline over the diffusion model — CONFIRMED, MAJOR FINDING, connects directly to E2
 First real evaluation comparison: CNN baseline PR-AUC 0.867 → 0.655
 vs. diffusion model 0.819 → 0.591 (+10min → +60min), a consistent

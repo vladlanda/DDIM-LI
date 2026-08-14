@@ -4,15 +4,53 @@ Working document tracking what's needed before submission. Update status
 inline as items complete. See conversation history for full rationale
 behind each item.
 
-**Target venues:** npj Climate and Atmospheric Science (primary), IEEE TGRS
-(parallel), Atmospheric Research (fallback). Cross-checked against a
-predatory/low-quality publisher blocklist — all three clean. Note two
-near-miss confusions to avoid: IEEE Access (flagged, pay-to-publish
-mega-journal) is NOT IEEE TGRS (our recommendation, established subject
-journal, different venue despite shared publisher); Scientific Reports
-(flagged, Nature's no-novelty-bar mega-journal) is NOT npj Climate and
-Atmospheric Science (our recommendation, curated Nature Portfolio
-subject journal — where Song et al. 2023 was published).
+**Target venues, revisited 2026-08-14 given the finalized results (see
+FINDINGS.md F3b/F4 for the reasoning):**
+1. **npj Climate and Atmospheric Science** (primary, unchanged) — direct
+   precedent (Song et al. 2023, same subfield), Q1, IF ~8-9.6 (rising),
+   explicit scope match: journal's own stated focus includes "regional
+   studies which demonstrate new understanding of a particular
+   locality" — exactly this paper's shape (Central Africa + the E2
+   mechanistic finding). ~21wk avg review, APC ~$2,990-3,290, OA.
+2. **NEW candidate, seriously worth adding: AMS's "Artificial
+   Intelligence for the Earth Systems" (AIES).** Arguably a BETTER fit
+   than the original backups for this specific paper's balance of
+   contributions — AIES reviewers are specifically ML-for-geoscience
+   people who would treat the baseline-verification-methodology work
+   (FINDINGS.md F4: CNN/LightGBM/ensemble-size/spatial-tolerance
+   analysis, corroborated by GenCast) as a first-class contribution,
+   not a secondary methods detail. Direct subfield precedent: Leinonen
+   et al. 2022 (deep learning lightning nowcasting, Switzerland)
+   published there. AMS's "Weather and Forecasting" (where LightningCast/
+   Cintineo et al. 2022 was published) is a reasonable alternative in
+   the same family if AIES's ML-methods framing doesn't fit as well as
+   expected once drafting starts.
+3. **IEEE TGRS** — demoted from "parallel" to a secondary option.
+   Reasoning: still a legitimate rigorous venue and would likely
+   appreciate the statistical rigor, but its focus (general remote-
+   sensing/signal-processing methodology) fits this paper's specific
+   nowcasting-verification contribution less precisely than AIES does.
+   Not dropped — just no longer co-equal with npj Clim Atmos Sci.
+4. **Atmospheric Research** — kept as the safe fallback, unchanged.
+
+Cross-checked against a predatory/low-quality publisher blocklist — all
+clean. Two near-miss confusions to avoid: IEEE Access (flagged, pay-to-
+publish mega-journal) is NOT IEEE TGRS; Scientific Reports (flagged,
+Nature's no-novelty-bar mega-journal) is NOT npj Climate and Atmospheric
+Science.
+
+**IMPORTANT related-work addition (FINDINGS.md F3b):** Dai et al. 2025
+(PNAS), "Four-hour thunderstorm nowcasting using a deep diffusion model
+for satellite data" (DDMS) — a closely-related diffusion+geostationary-
+satellite convection-nowcasting paper, found while researching journal
+targets. NOT a scoop (different target variable — general convection vs.
+lightning specifically; different scope — global/4h vs. regional/1h;
+no analog to our E2 finding or F4's verification-methodology depth) but
+MUST be cited with an explicit differentiation paragraph in the
+Introduction/related work, regardless of which journal is chosen — a
+reviewer at any of the above venues will likely know this paper. Only
+skimmed via abstract/snippets so far — read in full before drafting
+that paragraph.
 
 **Current best model:** `outputs/nature_256_T36_ir_li_only` — 2-channel
 (ir105 + li), 790 epochs, trained on the regenerated (clean) dataset,
