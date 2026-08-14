@@ -85,6 +85,19 @@ bootstrap-CI significant at every lead — see FINDINGS.md B1.
       interpretable (see conversation for the 3-case reading guide).
       **Owner: user (GPU). Blocks: final model selection, some framing
       in Phase 3/4, but NOT Phase 2 items below.**
+      **Manuscript decision (2026-08-14):** NOT reporting this
+      confounded comparison in the manuscript, in any form, hedged or
+      otherwise — it's inconclusive (three variables moved at once)
+      and superseded by the clean, controlled final methodology.
+      Reporting it with caveats would invite more scrutiny than
+      omitting it, for zero evidentiary value. This is different in
+      kind from the CNN-baseline/ensemble-size/generalization
+      caveats, which stay prominently disclosed (FINDINGS.md F4,
+      PAPER_TODO.md Phase 2/3) because they DO bear on interpreting
+      the headline claims — this one doesn't support or refute
+      anything cleanly, so there's nothing there to disclose. If the
+      deferred control run above ever gets done and produces a clean
+      result, revisit this decision then.
 - [ ] Check for an intermediate ~epoch-300 checkpoint from the existing
       2ch@790 run, if one was saved — would give a fully epoch-matched
       comparison at zero extra compute. Worth a quick look before
