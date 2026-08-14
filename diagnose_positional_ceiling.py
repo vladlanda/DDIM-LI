@@ -108,6 +108,12 @@ def main():
     p.add_argument("--max_shift", type=int, default=4,
                    help="Max global shift (px) for best-shift PR-AUC.")
     p.add_argument("--li_event_threshold", type=float, default=5.0/255.0)
+    p.add_argument("--output_csv", default=None,
+                   help="If set, save the per-lead-time results table "
+                        "(exact/base_rate/near{X}km/best_shift) to this "
+                        "CSV path, for figure generation (e.g. by "
+                        "manuscript/generate_figures.ipynb) -- this "
+                        "script previously only printed to console.")
     args = p.parse_args()
 
     cfg = load_yaml(args.config)
@@ -174,6 +180,7 @@ def main():
     hdr += f"  {'best_shift':>10}"
     print(hdr)
     print("-" * len(hdr))
+    csv_rows = []
 
     for t in range(T_out):
         lead = (t + 1) * dt_min
@@ -185,6 +192,7 @@ def main():
 
         base_rate = float(np.stack(lbls).mean())
         row = f"  +{lead:3d}m  {exact:>7.3f}  {base_rate:>9.4f}"
+        csv_row = {"lead_min": lead, "exact": exact, "base_rate": base_rate}
 
         # Displacement-tolerant PR-AUC (FSS-style): a prediction pixel is a
         # hit if an observed event lies WITHIN radius r. Dilate ONLY the
@@ -200,6 +208,7 @@ def main():
                 relaxed_p.append(prob)                                  # raw prob
                 relaxed_l.append(maximum_filter(lbl, size=size, mode="constant"))
             row += f"  {pr_auc(np.stack(relaxed_p), np.stack(relaxed_l)):>10.3f}"
+            csv_row[f"near_{(2*r+1)*4}km"] = pr_auc(np.stack(relaxed_p), np.stack(relaxed_l))
 
         # best-shift: per-sequence optimal shift, then aggregate
         shifted_p, kept_l = [], []
@@ -214,6 +223,8 @@ def main():
                         best_a, best_field = a, s
             shifted_p.append(best_field); kept_l.append(lbl)
         row += f"  {pr_auc(np.stack(shifted_p), np.stack(kept_l)):>10.3f}"
+        csv_row["best_shift"] = pr_auc(np.stack(shifted_p), np.stack(kept_l))
+        csv_rows.append(csv_row)
 
         print(row)
 
@@ -225,6 +236,14 @@ def main():
     print("    justified (retraining worth the compute).")
     print("  - If relaxed PR-AUC stays < 0.7, that ceiling is not reachable")
     print("    from this signal -> stop chasing 0.7, report the horizon.")
+
+    if args.output_csv:
+        import csv
+        with open(args.output_csv, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=csv_rows[0].keys())
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        print(f"\nSaved -> {args.output_csv}")
 
 
 if __name__ == "__main__":
