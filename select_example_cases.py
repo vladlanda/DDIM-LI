@@ -269,12 +269,25 @@ def main():
         # cell (context_ir kept in whatever units ctx_den has for "ir";
         # LI converted to the same physical/event-probability space used
         # throughout the rest of this project's evaluation).
+        #
+        # NOTE: tgt_den/ens_den are ALREADY physical-space here (the
+        # denormalize() loop just above already inverts the z-score AND
+        # the cbrt transform for "li", identically to what _li_to_physical
+        # does). Calling _li_to_physical again on top of that -- as an
+        # earlier version of this script did -- double-applies the
+        # inverse-cbrt (cubing an already-cubed value) and collapses
+        # nearly everything toward 0 after the final clip, which is
+        # exactly the "ground truth / ensemble members all render as a
+        # single flat blank color" bug this comment is here to prevent
+        # reintroducing. denormalize() doesn't clip to [0,1] the way
+        # _li_to_physical does, so that clip is applied explicitly here
+        # instead, without repeating the transform itself.
         ir_idx_ctx = _ctx_chs.index("ir") if "ir" in _ctx_chs else 0
         npz_payload[f"{name}_context_ir"] = ctx_den[:, ir_idx_ctx].astype(np.float32)
-        npz_payload[f"{name}_target_li"] = _li_to_physical(tgt_den[:, li_idx], stats).astype(np.float32)
-        npz_payload[f"{name}_ensemble_li"] = np.stack([
-            _li_to_physical(ens_den[m, :, li_idx], stats) for m in range(ens_den.shape[0])
-        ]).astype(np.float32)
+        npz_payload[f"{name}_target_li"] = np.clip(tgt_den[:, li_idx], 0.0, 1.0).astype(np.float32)
+        npz_payload[f"{name}_ensemble_li"] = np.clip(
+            ens_den[:, :, li_idx], 0.0, 1.0
+        ).astype(np.float32)
 
     npz_path = os.path.join(args.output_dir, "..", "example_cases.npz") \
         if os.path.basename(args.output_dir) == "figures" else \
