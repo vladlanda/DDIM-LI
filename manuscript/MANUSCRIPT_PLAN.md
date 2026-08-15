@@ -130,17 +130,37 @@ suggestion for E2. This is the central novel physical finding --
 deserves its own figure, not a panel buried in Figure 2.
 
 **Figure 4 -- Example nowcasts (qualitative).**
-NOT YET BUILT -- new, per this planning session. 2-3 representative
-storm cases, each showing: input IR+LI context (a few frames from the
-6h history), ground truth future LI activity, several individual
-ensemble member samples (demonstrating genuine sample diversity/
-physical plausibility), and the resulting ensemble probability map.
-This is the figure a reader uses to understand what the model's output
-actually looks like -- essential for a generative-model paper, and
-currently the biggest gap in the existing figure set. Case selection
-matters: pick cases that illustrate (i) a clear success, (ii) a
-genuinely uncertain/multimodal case where ensemble spread is
-informative, and possibly (iii) a failure case, for honesty.
+BUILT AND VALIDATED (2026-08-15): `select_example_cases.py` -- not a new
+inference pipeline, reuses evaluate.py's own checkpoint loading,
+`generate_ensemble`, and `plot_forecast` exactly (same rendering
+already used by evaluate.py's own `--plot` path). What was actually
+missing was CASE SELECTION, not plotting: the script does a cheap
+ground-truth-activity scan (no inference) over `--n_scan` sequences,
+selects low/moderate/high-activity candidates by default (or exact
+indices via `--candidate_indices` if you've manually identified a good
+uncertain/multimodal case by eye), then runs full ensemble inference
+only on the selected few. Produces both the publication PNG directly
+(via `plot_forecast`'s own richer rendering -- context / ensemble-mean
++ spread / ground truth) AND an `example_cases.npz` matching the
+notebook's Figure 4 cell schema exactly, so either can be used.
+Validated end-to-end against a tiny real (not mocked) diffusion model
+checkpoint -- actual EDM sampling, actual denormalization, actual
+`plot_forecast` rendering all executed successfully before trusting
+this. Caught one real bug in validation: `dataset.py`'s `denormalize`/
+`normalize` require every channel's stats entry to have an explicit
+`transform` key (confirmed this is a true invariant of real stats
+dicts, not a bug -- those functions are used throughout actual
+training, so a real stats dict missing this key would already break
+training itself; the bug was in the test's synthetic stats, not the
+codebase).
+**Still needed:** run this for real (`python select_example_cases.py
+--config configs/evaluate.yaml --checkpoint <path> --output_dir
+manuscript/figures`) and pick/curate the actual 2-3 cases for the
+paper from what it selects -- automatic activity-based selection is a
+reasonable default but can't identify a genuinely multimodal/uncertain
+case on its own (that requires inspecting ensemble spread, which
+requires having already run inference); use `--candidate_indices` to
+override once good cases are found by eye.
 
 **Figure 5 -- Why baseline comparison needs care (the F4 story).**
 Likely 2-3 panels: FSS-vs-scale comparison (diffusion vs. CNN,
@@ -188,8 +208,11 @@ all.
   structure" already exist; locate the actual files and assess
   journal-readiness (resolution, styling consistency with the
   established white-theme convention) before assuming they're final.
-- Case selection for Figure 4 needs real data access (pick actual
-  storm events) -- can't be done from this sandboxed environment.
+- Case selection for Figure 4: `select_example_cases.py` now exists and
+  is validated (see Figure 4's entry above) -- what's left is running it
+  for real (needs GPU/checkpoint/data access, not available in this
+  sandboxed environment) and curating the final 2-3 cases from its
+  output.
 
 ---
 

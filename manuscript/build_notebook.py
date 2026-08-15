@@ -208,15 +208,28 @@ code('''if have("positional_ceiling_csv"):
 
 md("""## Figure 4 — Example nowcasts (qualitative)
 
-**No existing script produces this data.** Needs a small companion script
-(not yet written) that loads a trained checkpoint, runs inference on a
-few chosen test sequences, and saves an npz with per-case arrays:
-`context_ir`, `context_li` (T_in,H,W), `target_li` (T_out,H,W), and
-`ensemble_li` (n_members,T_out,H,W) — physical-space, post
-`_li_to_physical`. Case selection needs real data access (not available
-in this sandboxed environment) — pick 2-3 representative storms:
-a clear success, a genuinely uncertain/multimodal case, and honestly,
-a failure case.""")
+Data comes from `select_example_cases.py` (repo root) — reuses
+`evaluate.py`'s own checkpoint loading, `generate_ensemble`, and
+`plot_forecast` directly, adding the case-*selection* logic that was
+actually missing (a cheap ground-truth-activity scan picks low/moderate/
+high-activity candidates, or pass `--candidate_indices` to render exact
+sequences you've identified by eye). Validated end-to-end against a real
+tiny diffusion checkpoint (actual EDM sampling, not mocked) before
+trusting it — see `MANUSCRIPT_PLAN.md`'s Figure 4 entry.
+
+That script already saves a publication-quality PNG per case directly via
+`plot_forecast`'s own rendering (context / ensemble-mean+spread / ground
+truth — richer than the simple per-member grid below). The cell below
+is a **lighter-weight alternative view** (individual members side by
+side) using the same `example_cases.npz` that script also saves — use
+whichever framing suits the manuscript better, they're not mutually
+exclusive.
+
+```bash
+python select_example_cases.py --config configs/evaluate.yaml \\
+    --checkpoint <path/to/best.pt> --output_dir manuscript/figures \\
+    --n_scan 60 --n_members 20
+```""")
 
 code('''if have("example_cases_npz"):
     data = np.load(PATHS["example_cases_npz"], allow_pickle=True)
