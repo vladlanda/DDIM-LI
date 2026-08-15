@@ -44,7 +44,7 @@ Usage:
   python select_example_cases.py --config configs/evaluate.yaml \
       --checkpoint outputs/nature_256_T36_ir_li_only/best.pt \
       --output_dir manuscript/figures \
-      --n_scan 60 --n_members 20
+      --n_scan 60 --n_members 50
 """
 import argparse
 import logging
@@ -84,7 +84,20 @@ def parse_args():
                         "identified a good uncertain/multimodal case by "
                         "inspecting a first pass's output.")
 
-    p.add_argument("--n_members", type=int, default=20)
+    p.add_argument("--n_members", type=int, default=50,
+                   help="Matches the project's established final "
+                        "evaluation setting (see FINDINGS.md F4 -- "
+                        "n_members=50 chosen via a documented "
+                        "diminishing-returns sweep). Deliberately NOT a "
+                        "smaller value for speed: plot_forecast renders "
+                        "the ensemble MEAN and SPREAD, not individual "
+                        "members side by side, so fewer members only "
+                        "makes that estimate less accurate for no "
+                        "speed benefit worth mentioning at the scale of "
+                        "2-3 example cases. Using a different ensemble "
+                        "size here than the paper's stated methodology "
+                        "would be an easy, avoidable inconsistency for "
+                        "a reviewer to catch.")
     p.add_argument("--cfg_scale", type=float, default=1.5)
     p.add_argument("--S_churn", type=float, default=40.0)
     p.add_argument("--S_noise", type=float, default=1.003)
