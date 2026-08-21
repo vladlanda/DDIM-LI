@@ -77,6 +77,16 @@ probabilistic forecast of lightning occurrence over the following hour
 (six 10-minute steps), sampled as an ensemble of 50 physically
 plausible realizations per forecast (Fig.~\ref{fig:overview}).
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{../figures/fig1_overview.png}
+\caption{\textbf{Study overview.} (a) Study region: four test areas
+within Central Africa. (b) Model schematic: 6-hour observation context
+processed by the EDM diffusion model, sampled as an ensemble of
+physically plausible forecast realizations.}
+\label{fig:overview}
+\end{figure}
+
 \subsection*{The model substantially outperforms physical extrapolation baselines, with an advantage that grows with lead time}
 
 We compared the model's pixel-wise precision-recall AUC (PR-AUC)
@@ -101,13 +111,35 @@ three baselines (persistence: +0.063 to +0.241; LI-derived optical
 flow: +0.075 to +0.239; IR-derived optical flow: +0.205 to +0.355;
 Fig.~\ref{fig:headline}).
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{../figures/fig2_headline_performance.png}
+\caption{\textbf{Headline performance.} PR-AUC vs.\ lead time for the
+model and the three physical baselines (persistence, LI-derived and
+IR-derived optical flow), with 95\% sequence-level paired bootstrap
+confidence bands.}
+\label{fig:headline}
+\end{figure}
+
 \subsection*{Lightning displacement at convective scale is not captured by any coherent motion field}
 
 [PLACEHOLDER --- draft after confirming the exact best\_shift
 methodology description belongs here vs.\ Methods, and after real
-Figure 3 data/numbers are available. See manuscript/sections/results.md
-for the equivalent placeholder and FINDINGS.md E2 for the underlying
-finding this subsection reports.]
+Figure~\ref{fig:displacement} numbers are described in prose. See
+manuscript/sections/results.md for the equivalent placeholder and
+FINDINGS.md E2 for the underlying finding this subsection reports.]
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.8\textwidth]{../figures/fig3_incoherent_displacement.png}
+\caption{\textbf{Displacement is incoherent, not advective.} PR-AUC
+vs.\ lead time under increasing spatial tolerance: exact pixelwise
+scoring, neighbourhood-relaxed scoring at several radii, and the
+best-case global-shift upper bound. Convergence of the relaxed and
+best-shift curves toward, but not beyond, a common ceiling indicates
+positional error is not explained by a single coherent motion field.}
+\label{fig:displacement}
+\end{figure}
 
 \subsection*{Example forecasts illustrate calibrated ensemble diversity}
 
@@ -115,6 +147,26 @@ finding this subsection reports.]
 select\_example\_cases.py (Fig.~\ref{fig:examples}) and their content
 can actually be described. Not available from this sandboxed
 environment.]
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\textwidth]{../figures/fig4_example_case_low_activity.png}\\[4pt]
+(a) Low-activity case\\[10pt]
+\includegraphics[width=0.85\textwidth]{../figures/fig4_example_case_moderate_activity.png}\\[4pt]
+(b) Moderate-activity case\\[10pt]
+\includegraphics[width=0.85\textwidth]{../figures/fig4_example_case_high_activity.png}\\[4pt]
+(c) High-activity case
+\caption{\textbf{Example forecasts.} Three representative test
+sequences spanning the observed range of lightning activity, each
+showing the final observed context frame, ground truth at +60~minutes,
+and individual ensemble member samples. [PLACEHOLDER: case selection
+here is automatic (ranked by ground-truth activity level), not
+necessarily the most illustrative uncertain/multimodal or failure case
+-- see select\_example\_cases.py's \texttt{--candidate\_indices} option
+and MANUSCRIPT\_PLAN.md's Figure 4 notes for manually curating a better
+set once real output has been inspected.]}
+\label{fig:examples}
+\end{figure}
 
 \subsection*{A directly-optimized deterministic classifier retains a narrow, lead-time-independent pointwise advantage, explained by information access rather than model class}
 
@@ -153,6 +205,27 @@ clearly diminishing-returns pattern (49\% of the gap closed increasing
 from 10 to 30 members, a further 21\% of the remainder closed from 30
 to 50; Fig.~\ref{fig:verification}b).
 
+\begin{figure}[t]
+\centering
+\fbox{\begin{minipage}{0.85\textwidth}\centering\vspace{3cm}
+\textit{Figure pending --- generate via manuscript/generate\_figures.ipynb\\(fig5a\_fss\_vs\_scale.png not yet generated)}
+\vspace{3cm}\end{minipage}}\\[4pt]
+(a) FSS vs.\ spatial scale, diffusion model vs.\ CNN baseline\\[10pt]
+\fbox{\begin{minipage}{0.55\textwidth}\centering\vspace{2cm}
+\textit{Figure pending\\(fig5b\_n\_members\_sensitivity.png not yet generated)}
+\vspace{2cm}\end{minipage}}\\[4pt]
+(b) Ensemble-size sensitivity
+\caption{\textbf{Why baseline comparison needs care.} (a) Fractions
+Skill Score vs.\ spatial neighbourhood scale, model vs.\ CNN baseline,
+at three probability thresholds -- the model's disadvantage at loose
+thresholds does not persist under spatial tolerance, and reverses at
+strict thresholds beyond $\sim$130~km. (b) PR-AUC vs.\ lead time at
+ensemble sizes of 10, 30, and 50 members, showing the diminishing-
+returns pattern underlying the ensemble-size choice used throughout
+this study.}
+\label{fig:verification}
+\end{figure}
+
 \subsection*{The model provides calibrated, genuine forecast uncertainty}
 
 [PLACEHOLDER --- draft once the reliability diagram and CRPS/spread-skill
@@ -161,6 +234,17 @@ numbers from Figure~\ref{fig:uncertainty} are finalized against real
 class the CNN/LightGBM baselines structurally cannot be evaluated on,
 since they produce a single deterministic output rather than a
 sample-based ensemble.]
+
+\begin{figure}[t]
+\centering
+\fbox{\begin{minipage}{0.85\textwidth}\centering\vspace{3cm}
+\textit{Figure pending --- generate via manuscript/generate\_figures.ipynb\\(fig6\_uncertainty\_quantification.png not yet generated)}
+\vspace{3cm}\end{minipage}}
+\caption{\textbf{Genuine forecast uncertainty.} (a) Reliability diagram,
+one line per lead time. (b) Continuous Ranked Probability Score and
+spread-skill ratio vs.\ lead time.}
+\label{fig:uncertainty}
+\end{figure}
 
 \section{Discussion}\label{sec:discussion}
 
@@ -295,16 +379,17 @@ whether the bootstrap methodology needs its own citation beyond
 standard practice.]
 
 %%===================================================%%
-%% Figures are referenced above by label but not yet  %%
-%% \includegraphics'd here -- final PNGs live in       %%
-%% manuscript/figures/, generated by                   %%
+%% All 6 figures are now embedded inline (near their   %%
+%% first \ref{}) using the exact filenames              %%
 %% manuscript/generate_figures.ipynb and                %%
-%% select_example_cases.py. Per the template's own      %%
-%% instruction, figures should be attached separately   %%
-%% rather than embedded for submission -- add           %%
-%% \includegraphics/figure environments here once final %%
-%% figure files are confirmed, keeping in mind they are %%
-%% also submitted as separate files.                    %%
+%% select_example_cases.py produce, under               %%
+%% manuscript/figures/. fig5a/fig5b/fig6 don't exist yet %%
+%% as real files as of this commit -- \includegraphics   %%
+%% will fail to find them until generated for real.      %%
+%% Per the template's own instruction, at final          %%
+%% SUBMISSION figures should also be attached separately %%
+%% as their own files, not only embedded in the .tex --  %%
+%% inline embedding here is for draft-review convenience.%%
 %%===================================================%%
 
 \backmatter
