@@ -1,0 +1,73 @@
+\begin{thebibliography}{1}
+\expandafter\ifx\csname url\endcsname\relax
+  \def\url#1{\burl{#1}}\fi
+\expandafter\ifx\csname urlprefix\endcsname\relax\def\urlprefix{URL }\fi
+\providecommand{\bibinfo}[2]{#2}
+\providecommand{\eprint}[2][]{\url{#2}}
+\providecommand{\doi}[1]{\url{https://doi.org/#1}}
+\bibcommenthead
+
+\bibitem{karras2022edm}
+\bibinfo{author}{Karras, T.}, \bibinfo{author}{Aittala, M.},
+  \bibinfo{author}{Aila, T.} \& \bibinfo{author}{Laine, S.}
+\newblock \bibinfo{title}{Elucidating the design space of diffusion-based
+  generative models}.
+\newblock \emph{\bibinfo{journal}{Advances in Neural Information Processing
+  Systems 35 (NeurIPS 2022)}}  (\bibinfo{year}{2022}).
+\newblock \bibinfo{note}{ArXiv preprint DOI -- the NeurIPS proceedings version
+  itself does not carry a separate Crossref DOI; see citations\_ledger.md for
+  verification notes}.
+
+\bibitem{pulkkinen2019pysteps}
+\bibinfo{author}{Pulkkinen, S.} \emph{et~al.}
+\newblock \bibinfo{title}{Pysteps: An open-source python library for
+  probabilistic precipitation nowcasting (v1.0)}.
+\newblock \emph{\bibinfo{journal}{Geoscientific Model Development}}
+  \textbf{\bibinfo{volume}{12}}, \bibinfo{pages}{4185--4219}
+  (\bibinfo{year}{2019}).
+
+\bibitem{metzl2025physical}
+\bibinfo{author}{Metzl, C.} \emph{et~al.}
+\newblock \bibinfo{title}{Physical scales matter: The role of receptive fields
+  and advection in satellite-based thunderstorm nowcasting with convolutional
+  neural networks}.
+\newblock \emph{\bibinfo{journal}{Artificial Intelligence for the Earth
+  Systems}} \textbf{\bibinfo{volume}{4}} (\bibinfo{year}{2025}).
+
+\bibitem{ke2017lightgbm}
+\bibinfo{author}{Ke, G.} \emph{et~al.}
+\newblock \bibinfo{title}{{LightGBM}: A highly efficient gradient boosting
+  decision tree}.
+\newblock \emph{\bibinfo{journal}{Advances in Neural Information Processing
+  Systems 30 (NeurIPS 2017)}} \bibinfo{pages}{3146--3154}
+  (\bibinfo{year}{2017}).
+\newblock \bibinfo{note}{NeurIPS proceedings version has no independent
+  Crossref DOI; the 10.5555 identifier resolves via the ACM Digital Library
+  mirror of the proceedings -- see citations\_ledger.md for verification
+  notes}.
+
+\bibitem{song2023lightning}
+\bibinfo{author}{Song, G.}, \bibinfo{author}{Li, S.} \& \bibinfo{author}{Xing,
+  J.}
+\newblock \bibinfo{title}{Lightning nowcasting with aerosol-informed machine
+  learning and satellite-enriched dataset}.
+\newblock \emph{\bibinfo{journal}{npj Climate and Atmospheric Science}}
+  \textbf{\bibinfo{volume}{6}}, \bibinfo{pages}{126} (\bibinfo{year}{2023}).
+
+\bibitem{roberts2008fss}
+\bibinfo{author}{Roberts, N.~M.} \& \bibinfo{author}{Lean, H.~W.}
+\newblock \bibinfo{title}{Scale-selective verification of rainfall
+  accumulations from high-resolution forecasts of convective events}.
+\newblock \emph{\bibinfo{journal}{Monthly Weather Review}}
+  \textbf{\bibinfo{volume}{136}}, \bibinfo{pages}{78--97}
+  (\bibinfo{year}{2008}).
+
+\bibitem{gneiting2007scoring}
+\bibinfo{author}{Gneiting, T.} \& \bibinfo{author}{Raftery, A.~E.}
+\newblock \bibinfo{title}{Strictly proper scoring rules, prediction, and
+  estimation}.
+\newblock \emph{\bibinfo{journal}{Journal of the American Statistical
+  Association}} \textbf{\bibinfo{volume}{102}}, \bibinfo{pages}{359--378}
+  (\bibinfo{year}{2007}).
+
+\end{thebibliography}

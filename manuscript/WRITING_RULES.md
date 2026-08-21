@@ -30,6 +30,13 @@ session on this manuscript, not just the one where they were set.
 
 ## File layout this implies
 
+**UPDATED 2026-08-21: manuscript content is authored in LaTeX, not
+Markdown** (see "Format decision" below for why). `manuscript/sections/
+*.md` are now historical drafts, superseded by `manuscript/latex/
+main.tex` -- their content was transcribed into main.tex already, but
+if you're picking this up fresh, treat main.tex as the single source of
+truth and the .md section files as reference/backup only.
+
 ```
 manuscript/
   WRITING_RULES.md              <- this file
@@ -38,15 +45,63 @@ manuscript/
   citations_ledger.md           <- claim -> citation -> DOI verification (rule 5, 6)
   generate_figures.ipynb        <- one figure per section (rule 3)
   figures/                      <- .png outputs from the notebook
-  sections/
+  latex/
+    main.tex                    <- AUTHORITATIVE manuscript source (single file,
+                                    per Springer Nature's own submission
+                                    requirement -- no \input of separate
+                                    section files)
+    main.pdf                    <- last compiled output, committed so the
+                                    formatted paper is viewable without a
+                                    local LaTeX toolchain
+    main.bbl                    <- compiled bibliography (regenerate via
+                                    bibtex if references.bib changes)
+    sn-jnl.cls, sn-nature.bst   <- Springer Nature's official template files,
+                                    "sn-nature" style = the option specifically
+                                    for Nature Portfolio journal submissions
+  sections/                     <- SUPERSEDED, historical drafts only
     abstract.md
     introduction.md
-    results.md
+    results.md                  <- transcribed into main.tex already
     discussion.md
-    methods.md
-  discussion_cnn_baseline_comparison.md   <- existing draft, predates these rules
+    methods.md                  <- transcribed into main.tex already
+  discussion_cnn_baseline_comparison.md   <- existing draft, predates these rules;
+                                              not yet merged into main.tex
   reviewer_premortem_cnn_lightgbm_baselines.md   <- existing, predates these rules
 ```
+
+## Format decision: LaTeX, not Markdown (added 2026-08-21)
+
+Sections were originally drafted in Markdown, matching this project's
+existing documentation (FINDINGS.md, PAPER_TODO.md, etc.). User asked
+directly why not author in LaTeX given the actual npj submission target
+-- reconsidered and switched, for concrete reasons, not just preference:
+
+- npj's own submission guidelines (verified via nature.com, not
+  assumed): initial submission wants a compiled PDF or Word file;
+  LaTeX source is accepted (and Springer Nature explicitly supports it,
+  including for the npj series specifically) at the acceptance stage.
+  Authoring in LaTeX from the start produces both artifacts from one
+  source -- compiles directly to the PDF needed now, and is already the
+  right format for later -- rather than drafting in Markdown and having
+  to convert/reformat at acceptance.
+- `references.bib` already existed (built for rule 4) -- LaTeX's
+  `\cite{}` + `\bibliography{}` integrates with it directly and
+  automatically enforces npj's numbered-reference style (rule 7)
+  without manually tracking citation order, which the Markdown
+  bracket-placeholder approach could not do.
+- Springer Nature provides an official template (`sn-jnl.cls`) with a
+  style option built specifically for Nature Portfolio journals
+  (`sn-nature`) -- confirmed via web search, not assumed, and pulled
+  from the actual GitHub-mirrored template package (not hand-built),
+  including the matching `sn-nature.bst` bibliography style.
+- The full pipeline (pdflatex -> bibtex -> pdflatex x2) was actually
+  compiled and the output visually inspected before trusting it, same
+  validate-before-trusting discipline as the rest of this project --
+  caught and fixed a real `sn-nature.bst` incompatibility with bare
+  `@inproceedings` entries (both NeurIPS papers, karras2022edm and
+  ke2017lightgbm) lacking publisher/address fields; fixed by using
+  `@article` entries instead (a common, accurate convention for citing
+  NeurIPS proceedings), not by inventing missing fields.
 
 ## Process for rules 5 & 6 (claim-checking + DOI verification)
 

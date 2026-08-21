@@ -1,0 +1,323 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% DDIM-LI manuscript -- target: npj Climate and Atmospheric Science %%
+%% Built on Springer Nature's official sn-jnl template (sn-nature     %%
+%% style option: "Style for submissions to Nature Portfolio          %%
+%% journals" -- confirmed correct for npj via web search this        %%
+%% session, see WRITING_RULES.md).                                   %%
+%%                                                                    %%
+%% Per the template's own instruction, this is kept as ONE .tex      %%
+%% file (no \input of separate section files) -- Springer Nature's   %%
+%% submission systems expect a single manuscript file.                %%
+%%                                                                    %%
+%% STATUS: DRAFT. Sections marked [PLACEHOLDER] are not yet written  %%
+%% -- do not compile-and-submit without replacing every placeholder. %%
+%% See manuscript/MANUSCRIPT_PLAN.md and manuscript/citations_ledger.md%%
+%% for what's still outstanding.                                     %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[pdflatex,sn-nature]{sn-jnl}% Style for submissions to Nature Portfolio journals
+
+\usepackage{graphicx}%
+\usepackage{multirow}%
+\usepackage{amsmath,amssymb,amsfonts}%
+\usepackage{amsthm}%
+\usepackage{mathrsfs}%
+\usepackage[title]{appendix}%
+\usepackage{xcolor}%
+\usepackage{textcomp}%
+\usepackage{manyfoot}%
+\usepackage{booktabs}%
+\usepackage{geometry}%
+
+\raggedbottom
+
+\begin{document}
+
+\title[Probabilistic lightning nowcasting over Central Africa]{%
+[PLACEHOLDER TITLE -- draft once Results/Discussion are finalized;
+avoid overlapping language with Dai et al. 2025's "four-hour
+thunderstorm nowcasting" framing, see FINDINGS.md F3b]}
+
+%% [PLACEHOLDER author block -- real names/affiliations/ORCIDs not
+%% available from this sandboxed environment]
+\author*[1]{\fnm{[First]} \sur{[Author]}}\email{[email]}
+\affil*[1]{\orgdiv{[Department]}, \orgname{[Institution]}, \orgaddress{\city{Tel Aviv}, \country{Israel}}}
+
+\abstract{%
+[PLACEHOLDER -- not yet drafted, see manuscript/sections/abstract.md
+for the planned structure. Draft last, after Results/Discussion are
+finalized, per standard practice -- the abstract summarizes the paper,
+so writing it first risks having to rewrite it anyway.]
+}
+
+\keywords{lightning nowcasting, diffusion model, probabilistic forecasting, satellite remote sensing, Central Africa, deep learning}
+
+\maketitle
+
+\section{Introduction}\label{sec:intro}
+
+[PLACEHOLDER -- not yet drafted. Needs citation verification first
+(lightning hazard statistics, Central Africa lightning climatology) --
+see manuscript/citations\_ledger.md's "not yet searched" list.
+manuscript/sections/introduction.md has the planned outline/flow.
+Requires an explicit differentiation paragraph against Dai et al.\
+2025 (FINDINGS.md F3b) -- that paper has only been seen via
+abstract/search snippets so far, needs a full read before this
+paragraph is drafted.]
+
+\section{Results}\label{sec:results}
+
+We developed a probabilistic lightning nowcasting system based on the
+elucidated diffusion model (EDM) framework \citep{karras2022edm},
+trained on infrared brightness temperature and lightning-imager
+observations from the MTG-FCI geostationary instrument over four
+regions of Central Africa. The model takes a 6-hour observation history
+(36 frames at 10-minute resolution) as context and generates a
+probabilistic forecast of lightning occurrence over the following hour
+(six 10-minute steps), sampled as an ensemble of 50 physically
+plausible realizations per forecast (Fig.~\ref{fig:overview}).
+
+\subsection*{The model substantially outperforms physical extrapolation baselines, with an advantage that grows with lead time}
+
+We compared the model's pixel-wise precision-recall AUC (PR-AUC)
+against three physically-motivated baselines: persistence, and two
+variants of optical-flow extrapolation (pySTEPS-style
+semi-Lagrangian advection \citep{pulkkinen2019pysteps}) driven
+respectively by the lightning-imager and infrared channels. Across the
+six 10-minute lead-time steps tested (+10 to +60 minutes), the model's
+PR-AUC ranged from 0.846 to 0.631, compared with 0.783 to 0.391 for
+persistence --- the strongest of the three physical baselines at every
+lead time except +60 minutes, where the LI-derived optical-flow
+baseline narrowly exceeded it (0.392 versus 0.391). The model's margin
+over the best available physical baseline grew from 8.1\% at +10
+minutes to 61.0\% at +60 minutes (Fig.~\ref{fig:headline}).
+
+Using sequence-level paired bootstrap confidence intervals (1{,}000
+resamples, resampling whole test sequences rather than individual
+pixels to respect within-scene spatial correlation), every one of these
+comparisons was statistically significant (95\% CI excluding zero) at
+every lead time tested, with the margin growing monotonically for all
+three baselines (persistence: +0.063 to +0.241; LI-derived optical
+flow: +0.075 to +0.239; IR-derived optical flow: +0.205 to +0.355;
+Fig.~\ref{fig:headline}).
+
+\subsection*{Lightning displacement at convective scale is not captured by any coherent motion field}
+
+[PLACEHOLDER --- draft after confirming the exact best\_shift
+methodology description belongs here vs.\ Methods, and after real
+Figure 3 data/numbers are available. See manuscript/sections/results.md
+for the equivalent placeholder and FINDINGS.md E2 for the underlying
+finding this subsection reports.]
+
+\subsection*{Example forecasts illustrate calibrated ensemble diversity}
+
+[PLACEHOLDER --- draft once real example cases are selected via
+select\_example\_cases.py (Fig.~\ref{fig:examples}) and their content
+can actually be described. Not available from this sandboxed
+environment.]
+
+\subsection*{A directly-optimized deterministic classifier retains a narrow, lead-time-independent pointwise advantage, explained by information access rather than model class}
+
+To assess how the model compares against directly-optimized machine
+learning baselines --- not just physical extrapolation --- we trained a
+convolutional neural network (CNN) baseline, architecturally and in
+training recipe matched to Metzl et al.\ \citep{metzl2025physical}, and
+a LightGBM \citep{ke2017lightgbm} baseline using hand-engineered
+features, in the methodological spirit of Song et al.\
+\citep{song2023lightning}. Both baselines' respective training
+objectives (binary cross-entropy for the CNN, logistic loss for
+LightGBM) directly match the pointwise verification metric used here,
+unlike the diffusion model's own training objective.
+
+The model significantly outperformed LightGBM at every lead time, with
+a margin that grew from +0.018 at +10 minutes to +0.185 at +60 minutes
+--- the same qualitative shape as the three physical baselines. Against
+the CNN baseline, however, the model showed a small but statistically
+significant pointwise disadvantage at every lead time (-0.021 to
+-0.024), and unlike every other comparison, this margin remained
+essentially constant across the full 50-minute range tested rather than
+growing (Fig.~\ref{fig:verification}b; see Discussion for
+interpretation of this lead-time-independent shape).
+
+This pointwise disadvantage against the CNN baseline was concentrated
+at loose probability thresholds and did not persist under spatial
+tolerance: at a strict, majority-consensus probability threshold
+($p > 0.5$), the model's Fractions Skill Score matched or exceeded the
+CNN baseline's at spatial scales beyond approximately 130~km
+(Fig.~\ref{fig:verification}a). We further found that this pointwise
+gap was substantially, though not entirely, attributable to the
+ensemble size used to construct the model's per-pixel probability
+estimate: increasing the ensemble from 10 to 50 members closed roughly
+60\% of the original PR-AUC gap against the CNN baseline, with a
+clearly diminishing-returns pattern (49\% of the gap closed increasing
+from 10 to 30 members, a further 21\% of the remainder closed from 30
+to 50; Fig.~\ref{fig:verification}b).
+
+\subsection*{The model provides calibrated, genuine forecast uncertainty}
+
+[PLACEHOLDER --- draft once the reliability diagram and CRPS/spread-skill
+numbers from Figure~\ref{fig:uncertainty} are finalized against real
+(not synthetic) data. Key point to make here: this is the capability
+class the CNN/LightGBM baselines structurally cannot be evaluated on,
+since they produce a single deterministic output rather than a
+sample-based ensemble.]
+
+\section{Discussion}\label{sec:discussion}
+
+[PLACEHOLDER --- not yet drafted in this file. A substantial existing
+draft covering the baseline-verification portion (the F4 story) exists
+at manuscript/discussion\_cnn\_baseline\_comparison.md, written before
+these LaTeX/citation rules were established --- needs merging in here
+and its citations re-verified against citations\_ledger.md before use.
+The remaining Discussion content (interpreting the incoherent-
+displacement finding, limitations, future work, broader significance)
+is outlined but not drafted in manuscript/sections/discussion.md.]
+
+\section{Methods}\label{sec:methods}
+
+\subsection*{Study region and data}
+
+[PLACEHOLDER: MTG-FCI instrument citation not yet verified --- see
+citations\_ledger.md "not yet searched" list. Do not finalize this
+paragraph until that citation is resolved.] The study region comprises
+four test regions within Central Africa (see Fig.~\ref{fig:overview}a
+for exact boundaries). Input data are drawn from the MTG-FCI
+geostationary satellite instrument at 4~km spatial resolution and
+10-minute temporal resolution, using two channels: an infrared window
+channel (ir) and a lightning-imager-derived channel (li). The model
+takes a 6-hour context window ($T_{in} = 36$ frames) and forecasts a
+1-hour horizon ($T_{out} = 6$ frames at 10-minute steps).
+
+\subsection*{Preprocessing}
+
+Both channels are normalized (z-scored) prior to input. The li channel
+additionally undergoes a cube-root transform prior to normalization,
+chosen because the transform preserves exact zero values --- physically
+meaningful for a channel that is either exactly zero (no lightning
+activity) or continuously nonzero --- which matters for the
+thresholding convention used consistently throughout evaluation
+(ground-truth binarization is always performed in physical space, after
+inverting both the z-score and the cube-root transform, using a strict
+greater-than-zero threshold for the raw physical field and a small
+fixed threshold, 5/255, for probability-style outputs derived from
+learned models).
+
+\subsection*{Model architecture}
+
+The model follows the elucidated diffusion model (EDM) framework of
+Karras et al.\ \citep{karras2022edm}, implemented as a UNet built from
+residual blocks, conditioned on the observation context and on lead
+time via a shared embedding pathway. [PLACEHOLDER: confirm exact
+base\_channels/channel\_mults/num\_res\_blocks/attn\_resolutions values
+against the actual training configuration before finalizing --- these
+should be pulled directly from configs/default.yaml or the final
+checkpoint's saved args, not from memory.]
+
+\subsection*{Training}
+
+The model was trained with distributed data parallelism across two
+GPUs, using exponential moving average (EMA) weights for inference,
+automatic mixed precision, and a cosine annealing learning rate
+schedule, for 790 epochs on a regenerated, quality-controlled version
+of the training dataset.
+
+\subsection*{Ensemble size}
+
+Forecasts are generated as an ensemble of sampled realizations from the
+diffusion process. We used 50 ensemble members for all final reported
+results, a setting chosen via a controlled sensitivity sweep (10, 30,
+and 50 members) that showed a clear diminishing-returns pattern:
+tripling the ensemble from 10 to 30 members closed roughly half of an
+initially large verification-metric gap against a directly-optimized
+deterministic baseline, while a further increase to 50 members closed
+only a further fifth of the remainder. We attribute the closed portion
+of this gap to a finite-sample bias in the empirical, ensemble-derived
+probability estimate at loose classification thresholds, confirmed
+directly by comparing each model's predicted-positive area fraction
+against the true event area fraction at matched thresholds (see
+Discussion).
+
+\subsection*{Baselines}
+
+\textbf{Persistence.} The most recent observed lightning field is used
+unchanged as the forecast at every lead time.
+
+\textbf{Optical flow.} Two pySTEPS-style \citep{pulkkinen2019pysteps}
+semi-Lagrangian extrapolation baselines, driven respectively by
+lightning-imager-derived and infrared-derived motion fields.
+
+\textbf{Convolutional neural network (CNN).} A deterministic UNet-style
+classifier trained directly on next-frame lightning occurrence via
+per-pixel binary cross-entropy, following the general architecture and
+training-recipe choices of Metzl et al.\ \citep{metzl2025physical}
+(weight decay and learning-rate schedule matched directly to their
+reported values). Two departures from their exact protocol were made
+deliberately: the CNN baseline shares the diffusion model's own 6-hour
+context window and single-model lead-time amortization (rather than
+Metzl et al.'s $\sim$30-minute context and separately-trained
+per-lead-time models), to hold input information and model structure
+constant across our own internal comparisons --- the more rigorous
+choice for isolating model architecture as the controlled variable in
+this study specifically, even though it diverges from their literal
+setup.
+
+\textbf{LightGBM.} A gradient-boosted-tree classifier
+\citep{ke2017lightgbm} trained on 18 hand-engineered features derived
+from the same ir/li channels (temporal window statistics,
+trend/finite-difference features, local spatial neighbourhood
+aggregation, and event-recency features), in the methodological spirit
+of Song et al.\ \citep{song2023lightning} --- not a literal reproduction
+of their protocol, which uses a different input resolution and feature
+set (including aerosol and reanalysis inputs not available to this
+study). Class imbalance was addressed via LightGBM's native
+class-weighting mechanism rather than the manual resampling used for
+the CNN baseline, reflecting standard practice for each respective
+model class rather than a forced consistency between them.
+
+\subsection*{Evaluation metrics}
+
+Skill was assessed via pixel-wise precision-recall AUC (PR-AUC),
+critical success index / probability of detection / false alarm ratio
+at multiple probability thresholds, the Fractions Skill Score (FSS)
+\citep{roberts2008fss} at multiple spatial neighbourhood scales
+(12--260~km), and the Continuous Ranked Probability Score (CRPS) with
+its reliability/resolution/uncertainty decomposition
+\citep{gneiting2007scoring}, together with reliability diagrams and
+spread-skill relationships to assess ensemble calibration directly.
+
+\subsection*{Statistical testing}
+
+All comparisons between the model and each baseline used sequence-level
+(not pixel-level) paired bootstrap confidence intervals, resampling
+whole test sequences with replacement (1{,}000 resamples) to respect
+within-scene spatial correlation in the data. [PLACEHOLDER: decide
+whether the bootstrap methodology needs its own citation beyond
+standard practice.]
+
+%%===================================================%%
+%% Figures are referenced above by label but not yet  %%
+%% \includegraphics'd here -- final PNGs live in       %%
+%% manuscript/figures/, generated by                   %%
+%% manuscript/generate_figures.ipynb and                %%
+%% select_example_cases.py. Per the template's own      %%
+%% instruction, figures should be attached separately   %%
+%% rather than embedded for submission -- add           %%
+%% \includegraphics/figure environments here once final %%
+%% figure files are confirmed, keeping in mind they are %%
+%% also submitted as separate files.                    %%
+%%===================================================%%
+
+\backmatter
+
+\section*{Data availability}
+[PLACEHOLDER]
+
+\section*{Code availability}
+[PLACEHOLDER --- link to the public repository once finalized.]
+
+\section*{Acknowledgements}
+[PLACEHOLDER]
+
+\bibliography{../references}
+
+\end{document}
