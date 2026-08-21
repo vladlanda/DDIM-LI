@@ -123,11 +123,37 @@ confidence bands.}
 
 \subsection*{Lightning displacement at convective scale is not captured by any coherent motion field}
 
-[PLACEHOLDER --- draft after confirming the exact best\_shift
-methodology description belongs here vs.\ Methods, and after real
-Figure~\ref{fig:displacement} numbers are described in prose. See
-manuscript/sections/results.md for the equivalent placeholder and
-FINDINGS.md E2 for the underlying finding this subsection reports.]
+If residual positional error were explained by a single coherent
+motion field --- the entire forecast scene displaced by one
+translation vector, as assumed implicitly by any advection-based
+extrapolation method --- then scoring each forecast against the
+best-possible single global shift of the observed field should recover
+most of the skill unlocked by tolerating position error generally.
+We tested this directly by comparing exact pixelwise PR-AUC against
+(i) the best achievable score under an unconstrained per-scene global
+shift and (ii) scores under local neighbourhood tolerance (spatial
+pooling at 12, 20, and 28~km radii, with no shift constraint), across
+sequences from the test set.
+
+The best global shift recovered only a small fraction of the skill
+available under local spatial tolerance, and this fraction did not
+increase with lead time. At +10~minutes, allowing the single best
+global shift improved PR-AUC from 0.783 to 0.786 --- 7\% of the gain
+available from 12~km neighbourhood tolerance alone (0.831). At
++60~minutes, the corresponding improvement was 0.524 to 0.538, or 16\%
+of the 12~km-tolerance gain (0.612), and a substantially smaller
+fraction of the gain available at 28~km tolerance (0.676;
+Fig.~\ref{fig:displacement}). If the model's positional errors were
+predominantly a coherent, correctable displacement, the best-shift
+curve should approach the neighbourhood-relaxed curves as tolerance
+radius increases; instead it remains close to the exact, unrelaxed
+score at every lead time tested. This is consistent with positional
+error that is spatially heterogeneous at the pixel level rather than a
+single global translation, and provides direct, model-independent
+evidence for why advection-based extrapolation baselines (persistence,
+optical flow) cannot close the gap to the model at these lead times
+(cf.\ Fig.~\ref{fig:headline}): there is no single motion field for
+them to estimate.
 
 \begin{figure}[t]
 \centering
@@ -143,10 +169,23 @@ positional error is not explained by a single coherent motion field.}
 
 \subsection*{Example forecasts illustrate calibrated ensemble diversity}
 
-[PLACEHOLDER --- draft once real example cases are selected via
-select\_example\_cases.py (Fig.~\ref{fig:examples}) and their content
-can actually be described. Not available from this sandboxed
-environment.]
+[PLACEHOLDER --- checked the actual committed
+fig4\_example\_case\_\{low,moderate,high\}\_activity.png files directly
+(2026-08-21): all three currently show a real, structured context
+frame but a completely blank ground-truth panel and blank ensemble
+members. This matches the exact symptom of a bug already found and
+fixed in select\_example\_cases.py this session (a double application
+of the physical-space transform on the li channel -- see git history)
+-- these three files were generated before that fix and need to be
+regenerated, not just described from what's currently committed.
+Re-run: \texttt{python select\_example\_cases.py --config
+configs/evaluate.yaml --checkpoint <path> --output\_dir
+manuscript/figures --n\_scan 60 --n\_members 50}, then this subsection
+can be drafted from the real, corrected output. Automatic case
+selection (ranked by ground-truth activity) may also not be the most
+illustrative set -- consider \texttt{--candidate\_indices} once
+corrected output can be inspected, per MANUSCRIPT\_PLAN.md's Figure 4
+notes.]
 
 \begin{figure}[t]
 \centering
