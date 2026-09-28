@@ -34,9 +34,12 @@ Changes relative to projection_rutine.py (v1), and why:
    AFA is already an integer count, so nothing is lost now except values
    above 255, which are clipped and counted in the log.
 
-Geolocation of the AFA grid is IDENTICAL to v1 (same azimuth/elevation ->
-lat/lon routine and the same hard-coded FCI 2 km grid constants), since v1's
-geolocation was validated visually against the IR imagery.
+6. GEOLOCATION FROM THE FILE'S OWN COORDINATES. Same azimuth/elevation ->
+   lat/lon formula as v1, but applied to the CF-decoded x/y of each record
+   instead of integer indices + hard-coded constants. v1 mixed the file's
+   1-based column indices with a 0-based constant and was one 2 km column
+   (~2.3 km, ~0.7 target px) too far east in the study regions; rows were
+   right. Below the resolution of a visual overlay.
 
 Output: <METEOSAT_ROOT>/afa_projected_v2/<date>/<ir name with band->AFA>.png
 (full-disk, same size as the IR image; mostly zeros, so PNG stays small).
@@ -96,7 +99,7 @@ def azel_to_latlon(az, el, r_eq=6378137.0, f=1 / 298.257223563,
     return lat, lon
 
 
-def fci_rowcol_to_latlon(rows, cols):
+def fci_rowcol_to_latlon(rows, cols):  # legacy v1 convention -- kept only for comparison tests
     """Lat/lon of FCI 2 km grid cells (row=elevation index, col=azimuth index),
     with v1's exact conventions (azimuth sign flip, returned latitude negated).
     Evaluated only for the sparse lit cells -- no full 5568x5568 grid needed."""
@@ -108,30 +111,36 @@ def fci_rowcol_to_latlon(rows, cols):
 
 # --------------------------------------------------------------- AFA reading
 def read_afa_records(nc_path):
-    """Sparse AFA records: (rows, cols, values) on the FCI 2 km grid."""
+    """AFA per 2 km cell for the whole 10-min file: (azimuth, elevation, total).
+
+    The file holds 20 accumulations (30 s each, indexed by accumulation_offsets)
+    and lists a cell once per accumulation in which it was lit;
+    accumulated_flash_area is the number of unique flashes covering the cell in
+    that accumulation, so the 10-min value is the SUM over accumulations
+    (v1 summed too: li_map[el, az] += value).
+
+    Geolocation uses the file's own CF-decoded coordinates (x = azimuth,
+    y = elevation, radians). v1 instead combined the file's integer indices
+    with hard-coded grid constants: the file's integers are 1-based
+    (add_offset = 2784.5 * step) while v1's constant assumed 0-based
+    (2783.5 * step), so v1 placed every cell one column (~2.3 km in the study
+    regions) too far east. Measured on a real file (2025-11-05 00:00):
+    N-S difference 0.00 km, E-W +2.34 km median in the four regions.
+    """
     from netCDF4 import Dataset
     with Dataset(nc_path) as nc:
         if nc.type != "AFA":
             raise ValueError(f"{nc_path}: expected type AFA, got {nc.type}")
-        x, y = nc.variables["x"], nc.variables["y"]
-        cols = np.rint((np.asarray(x[:]) - x.add_offset) / x.scale_factor).astype(np.int64)
-        rows = np.rint(-(np.asarray(y[:]) - y.add_offset) / y.scale_factor).astype(np.int64)
+        xv, yv = nc.variables["x"], nc.variables["y"]
+        az = np.asarray(xv[:], dtype=float)                      # radians (CF-decoded)
+        el = np.asarray(yv[:], dtype=float)
         values = np.asarray(nc.variables["accumulated_flash_area"][:], dtype=np.int64)
-    # v1 indexed li_map[el, az] with these values; the row formula yields NEGATIVE
-    # numbers (e.g. -4932..-887), which NumPy interprets as counting from the end.
-    # v1's validated geolocation therefore used row % 5568 -- reproduced explicitly.
-    rows, cols = rows % FCI_N, cols % FCI_N
-    return rows, cols, values
-
-
-def sum_per_cell(rows, cols, values):
-    """Total AFA per FCI 2 km cell over the whole file. A 10-min file holds many
-    records per cell (shorter accumulation slices); v1 summed them
-    (li_map[el, az] += value), which is the 10-min accumulation."""
-    lin = rows * FCI_N + cols
-    uniq, inv = np.unique(lin, return_inverse=True)
+        col = np.rint((az - xv.add_offset) / xv.scale_factor).astype(np.int64)   # cell keys only
+        row = np.rint((el - yv.add_offset) / yv.scale_factor).astype(np.int64)
+    key = (row - row.min()) * (col.max() - col.min() + 1) + (col - col.min())
+    uniq, first, inv = np.unique(key, return_index=True, return_inverse=True)
     totals = np.bincount(inv, weights=values).astype(np.int64)
-    return uniq // FCI_N, uniq % FCI_N, totals
+    return az[first], el[first], totals, int(values.size)
 
 
 def read_wld(wld_path):
@@ -140,25 +149,24 @@ def read_wld(wld_path):
     return {"x_size": v[0], "y_size": v[3], "x_luc": v[4], "y_luc": v[5]}
 
 
-def project_to_grid(rows, cols, values, wld, shape):
-    """Sum records per 2 km cell, then max-aggregate cells onto the IR lat/lon grid.
+def project_to_grid(az, el, values, wld, shape, n_records=None):
+    """Place 2 km cells (already summed over the 10 min) on the IR lat/lon grid,
+    keeping the MAX over cells that fall into the same ~3.1 km pixel (max, not
+    sum: neighbouring cells covered by the same flash would be double counted).
 
-    Returns (grid uint8 = min(AFA,255), stats dict)."""
+    Returns (grid uint8 = min(AFA, 255), stats dict)."""
     height, width = shape
     grid = np.zeros(shape, dtype=np.int64)
+    base = {"records": n_records if n_records is not None else int(values.size), "cells": int(values.size)}
     if values.size == 0:
-        return grid.astype(np.uint8), {"records": 0, "cells": 0, "in_grid": 0, "clipped": 0, "max_afa": 0}
-    n_records = int(values.size)
-    rows, cols, values = sum_per_cell(rows, cols, values)       # 1) sum within each 2 km cell
-    lat, lon = fci_rowcol_to_latlon(rows.astype(float), cols.astype(float))
+        return grid.astype(np.uint8), {**base, "in_grid": 0, "clipped": 0, "max_afa": 0}
+    lat, lon = azel_to_latlon(az, el)
     ok = np.isfinite(lat) & np.isfinite(lon)
     tc = np.rint((lon - wld["x_luc"]) / wld["x_size"]).astype(np.int64)
     tr = np.rint((lat - wld["y_luc"]) / wld["y_size"]).astype(np.int64)
     ok &= (tc >= 0) & (tc < width) & (tr >= 0) & (tr < height)
     np.maximum.at(grid, (tr[ok], tc[ok]), values[ok])
-    # 2) max over the 2 km cells falling into one ~3.1 km pixel (same flash can cover several)
-    stats = {"records": n_records, "cells": int(values.size), "in_grid": int(ok.sum()),
-             "clipped": int((grid > 255).sum()), "max_afa": int(grid.max())}
+    stats = {**base, "in_grid": int(ok.sum()), "clipped": int((grid > 255).sum()), "max_afa": int(grid.max())}
     return np.clip(grid, 0, 255).astype(np.uint8), stats
 
 
@@ -230,8 +238,8 @@ def main():
             try:
                 with Image.open(jpg) as im:
                     shape = (im.size[1], im.size[0])
-                rows, cols, values = read_afa_records(unzip_nc(zip_path))
-                grid, st = project_to_grid(rows, cols, values, read_wld(wld_path), shape)
+                az, el, values, n_rec = read_afa_records(unzip_nc(zip_path))
+                grid, st = project_to_grid(az, el, values, read_wld(wld_path), shape, n_rec)
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 Image.fromarray(grid, mode="L").save(out)
                 totals["files"] += 1
