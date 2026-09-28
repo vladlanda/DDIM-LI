@@ -318,7 +318,7 @@ def make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, arg
         (region_rows, "region", "figS_region_skill.png", "Region")]:
         if not rows:
             continue
-        groups = sorted({r[key] for r in rows}, key=str)
+        groups = sorted({r[key] for r in rows}, key=lambda g: (isinstance(g, str), g if not isinstance(g, str) else 0, str(g)))
         fig, ax = plt.subplots(figsize=(max(6, 1.1 * len(groups) * len(runs) / 3), 4.5))
         width = 0.8 / len(runs)
         for i, name in enumerate(runs):
@@ -329,9 +329,9 @@ def make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, arg
         ax.set_xticklabels([str(g) for g in groups], rotation=0)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(("Average precision" if args.metric == "ap" else "PR-AUC") + " (all leads pooled)")
-        ax.legend(fontsize=8, ncol=3)
+        ax.legend(fontsize=8, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.15))
         fig.tight_layout()
-        fig.savefig(os.path.join(od, fname), dpi=300)
+        fig.savefig(os.path.join(od, fname), dpi=300, bbox_inches="tight")
         plt.close(fig)
     print(f"  figures -> {od}/fig7_*.png, fig8_*.png, figS_*.png")
 
