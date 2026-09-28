@@ -147,6 +147,9 @@ def main():
                         "compare against (paired bootstrap on the delta).")
     p.add_argument("--dt_min", type=int, default=10)
     p.add_argument("--n_boot", type=int, default=1000)
+    p.add_argument("--common_labels", action="store_true",
+                   help="Score all baselines against the main run's labels (requires "
+                        "pixel-aligned files). Recommended for the final table.")
     p.add_argument("--metric", choices=["pr_auc", "ap"], default="pr_auc",
                    help="pr_auc = trapezoidal area (original headline metric); "
                         "ap = average precision (non-interpolated, recommended).")
@@ -160,6 +163,30 @@ def main():
     for spec in args.baseline:
         name, path = spec.split(":", 1)
         baselines[name] = load_run(path)
+
+    if args.common_labels:
+        # Score every baseline against the MAIN run's labels. Files produced with
+        # different normalisation stats can disagree on pixels whose value sits
+        # exactly on li_event_threshold (float round-trip noise), which would
+        # otherwise compare models against slightly different ground truth.
+        for name, brun in baselines.items():
+            for t in list(brun):
+                if t not in main_run:
+                    continue
+                mprob, mlbl, mseq = main_run[t]
+                bprob, blbl, bseq = brun[t]
+                if bseq.shape != mseq.shape or not np.array_equal(bseq, mseq):
+                    raise ValueError(f"--common_labels: {name} lead {t} is not pixel-aligned "
+                                     f"with the main run (sequence ids differ).")
+                n_bad = int((blbl != mlbl).sum())
+                if n_bad / mlbl.size > 0.01:
+                    raise ValueError(f"--common_labels: {name} lead {t}: {n_bad} labels differ "
+                                     f"({n_bad / mlbl.size:.2%}) -- too many for threshold "
+                                     f"rounding; files are not comparable.")
+                if n_bad:
+                    print(f"  [common_labels] {name} +{(t+1)*args.dt_min}m: {n_bad} labels "
+                          f"replaced (own positives {int(blbl.sum())}, main {int(mlbl.sum())})")
+                brun[t] = (bprob, mlbl, bseq)
 
     steps = sorted(main_run.keys())
     print("=" * 100)

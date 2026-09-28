@@ -48,6 +48,10 @@ def parse_args():
                    help="Models whose scores are probabilities (calibration is "
                         "meaningless for persistence/optical-flow fields). "
                         "Default: all runs.")
+    p.add_argument("--label_tolerance", type=float, default=1e-2,
+                   help="Max fraction of pixels whose saved label may differ from "
+                        "the metadata label (threshold-boundary rounding from "
+                        "different normalisation stats). Above it: hard error.")
     p.add_argument("--radius_km", type=float, default=20.0)
     p.add_argument("--pixel_km", type=float, default=4.0)
     p.add_argument("--dt_min", type=int, default=10)
@@ -80,14 +84,26 @@ def load_all(args):
             if t not in run:
                 raise ValueError(f"{name}: lead index {t} missing")
             prob, lbl, sid = run[t]
-            if lbl.size != n or not np.array_equal(lbl.astype(np.int8), meta[f"label_{t}"]):
+            if lbl.size != n or not np.array_equal(sid, meta["seqid"]):
                 raise ValueError(
-                    f"{name} lead {t}: saved labels do NOT match the metadata "
-                    f"({lbl.size} vs {n} samples). The pixel alignment assumption "
-                    f"is broken for this file -- was it produced with different "
-                    f"test_roots / img_size / li_event_threshold / T_in / T_out?")
-            if not np.array_equal(sid, meta["seqid"]):
-                raise ValueError(f"{name} lead {t}: sequence ids do not match the metadata")
+                    f"{name} lead {t}: sample count or sequence ids do NOT match the "
+                    f"metadata ({lbl.size} vs {n} samples). The pixel alignment "
+                    f"assumption is broken for this file -- was it produced with "
+                    f"different test_roots / img_size / T_in / T_out?")
+            ref_lbl = meta[f"label_{t}"]
+            n_bad = int((lbl.astype(np.int8) != ref_lbl).sum())
+            if n_bad:
+                frac = n_bad / n
+                msg = (f"{name} lead {t}: {n_bad} of {n} saved labels ({frac:.2e}) differ "
+                       f"from the metadata labels (saved positives {int(lbl.sum())}, "
+                       f"metadata positives {int(ref_lbl.sum())})")
+                if frac > args.label_tolerance:
+                    raise ValueError(msg + " -- above --label_tolerance: labels do NOT "
+                                     "match the metadata; alignment assumption is broken.")
+                print("  WARNING " + msg + " -- within tolerance (threshold-boundary "
+                      "rounding); scoring against the common metadata labels.")
+            # every model is scored against ONE ground truth
+            run[t] = (prob, ref_lbl.astype(int), sid)
     print(f"Alignment OK: {len(runs)} runs x {T_out} leads x {n} pixels/lead match the metadata.")
     return meta, runs, T_out
 
