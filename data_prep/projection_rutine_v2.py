@@ -12,11 +12,12 @@ Changes relative to projection_rutine.py (v1), and why:
 2. AGGREGATION, NOT INTERPOLATION. v1 linearly interpolated the 2 km FCI
    grid onto the ~3.14 km lat/lon grid via a Delaunay triangulation of all
    5568 x 5568 points, which samples the field at target points and can
-   miss or smear isolated lightning pixels. AFA is sparse (one record per
-   lit pixel), so v2 maps each record to the target pixel that contains its
-   centre and keeps the MAXIMUM (max, not sum: neighbouring 2 km pixels
-   covered by the same flash would otherwise be double counted). Also far
-   faster: no triangulation.
+   miss or smear isolated lightning pixels. v2 first SUMS the records of
+   each 2 km cell (a 10-min file holds many records per cell; v1 summed
+   them too -- this is the 10-min accumulation), then maps each cell to the
+   target pixel containing its centre and keeps the MAXIMUM over cells
+   (max, not sum: neighbouring 2 km cells covered by the same flash would
+   otherwise be double counted). Also far faster: no triangulation.
 
 3. CORRECT GRID SPACING. v1 built target coordinates with
    np.linspace(ul, ul + W*px, W), whose spacing is px*W/(W-1), not px. At
@@ -116,7 +117,21 @@ def read_afa_records(nc_path):
         cols = np.rint((np.asarray(x[:]) - x.add_offset) / x.scale_factor).astype(np.int64)
         rows = np.rint(-(np.asarray(y[:]) - y.add_offset) / y.scale_factor).astype(np.int64)
         values = np.asarray(nc.variables["accumulated_flash_area"][:], dtype=np.int64)
+    # v1 indexed li_map[el, az] with these values; the row formula yields NEGATIVE
+    # numbers (e.g. -4932..-887), which NumPy interprets as counting from the end.
+    # v1's validated geolocation therefore used row % 5568 -- reproduced explicitly.
+    rows, cols = rows % FCI_N, cols % FCI_N
     return rows, cols, values
+
+
+def sum_per_cell(rows, cols, values):
+    """Total AFA per FCI 2 km cell over the whole file. A 10-min file holds many
+    records per cell (shorter accumulation slices); v1 summed them
+    (li_map[el, az] += value), which is the 10-min accumulation."""
+    lin = rows * FCI_N + cols
+    uniq, inv = np.unique(lin, return_inverse=True)
+    totals = np.bincount(inv, weights=values).astype(np.int64)
+    return uniq // FCI_N, uniq % FCI_N, totals
 
 
 def read_wld(wld_path):
@@ -126,20 +141,23 @@ def read_wld(wld_path):
 
 
 def project_to_grid(rows, cols, values, wld, shape):
-    """Max-aggregate sparse FCI records onto the IR lat/lon grid.
+    """Sum records per 2 km cell, then max-aggregate cells onto the IR lat/lon grid.
 
     Returns (grid uint8 = min(AFA,255), stats dict)."""
     height, width = shape
     grid = np.zeros(shape, dtype=np.int64)
     if values.size == 0:
-        return grid.astype(np.uint8), {"records": 0, "in_grid": 0, "clipped": 0, "max_afa": 0}
+        return grid.astype(np.uint8), {"records": 0, "cells": 0, "in_grid": 0, "clipped": 0, "max_afa": 0}
+    n_records = int(values.size)
+    rows, cols, values = sum_per_cell(rows, cols, values)       # 1) sum within each 2 km cell
     lat, lon = fci_rowcol_to_latlon(rows.astype(float), cols.astype(float))
     ok = np.isfinite(lat) & np.isfinite(lon)
     tc = np.rint((lon - wld["x_luc"]) / wld["x_size"]).astype(np.int64)
     tr = np.rint((lat - wld["y_luc"]) / wld["y_size"]).astype(np.int64)
     ok &= (tc >= 0) & (tc < width) & (tr >= 0) & (tr < height)
     np.maximum.at(grid, (tr[ok], tc[ok]), values[ok])
-    stats = {"records": int(values.size), "in_grid": int(ok.sum()),
+    # 2) max over the 2 km cells falling into one ~3.1 km pixel (same flash can cover several)
+    stats = {"records": n_records, "cells": int(values.size), "in_grid": int(ok.sum()),
              "clipped": int((grid > 255).sum()), "max_afa": int(grid.max())}
     return np.clip(grid, 0, 255).astype(np.uint8), stats
 
