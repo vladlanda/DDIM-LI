@@ -87,7 +87,7 @@ def compute_or_load_stats(
 
     logger.info(f"  Computing channel statistics (first run — will be cached) …")
     accum     = defaultdict(list)
-    all_files = list(Path(root).rglob("*.jpg"))
+    all_files = list(Path(root).rglob("*.png")) or list(Path(root).rglob("*.jpg"))  # v2 data: PNG
     np.random.shuffle(all_files)
     sample    = all_files[:n_samples]
 
@@ -234,7 +234,8 @@ def build_index(root: str,
     # --- Build from scratch: scan IR files only ---
     logger.info(f"  Building index for {Path(root).name} (first run — will be cached)")
 
-    ir_files = sorted(Path(root).glob("*_ir.jpg"))   # flat glob, IR only
+    # v2 data are lossless PNG (data_prep/pipeline_v2); fall back to legacy JPEG
+    ir_files = sorted(Path(root).glob("*_ir.png")) or sorted(Path(root).glob("*_ir.jpg"))
     index: Dict[datetime, Dict[str, Path]] = {}
     _n_present: Dict[str, int] = {}
     _n_black:   Dict[str, int] = {}
@@ -251,7 +252,7 @@ def build_index(root: str,
         # Derive all channel paths from the shared prefix — no extra stat calls
         chs: Dict[str, Path] = {}
         for ch in ALL_CHANNELS:
-            candidate = Path(str(prefix) + f"_{ch}.jpg")
+            candidate = Path(str(prefix) + f"_{ch}{ir_fp.suffix}")   # same format as the IR anchor
             # exists() is not enough: a present-but-all-black IR file would be
             # marked valid (ch_mask=1) and fed to the model as a constant plane.
             if _is_usable(candidate, ch, min_ir_bytes):
