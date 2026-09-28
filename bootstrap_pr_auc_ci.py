@@ -37,7 +37,7 @@ Usage:
 """
 import argparse
 import numpy as np
-from sklearn.metrics import precision_recall_curve, auc
+from sklearn.metrics import precision_recall_curve, auc, average_precision_score
 
 
 def pr_auc(prob, lbl):
@@ -45,6 +45,20 @@ def pr_auc(prob, lbl):
         return np.nan
     p, r, _ = precision_recall_curve(lbl, prob)
     return float(auc(r, p))
+
+
+def average_precision(prob, lbl):
+    """Non-interpolated PR summary (step-wise, sklearn average_precision_score).
+    Unlike the trapezoidal pr_auc above, it does not linearly interpolate
+    between PR operating points, which is optimistic for forecasts with few
+    distinct score values (Davis & Goadrich 2006) -- e.g. a binary no-skill
+    forecast scores ~base rate here but ~0.5 under the trapezoid."""
+    if lbl.sum() == 0 or lbl.sum() == lbl.size:
+        return np.nan
+    return float(average_precision_score(lbl, prob))
+
+
+METRICS = {"pr_auc": pr_auc, "ap": average_precision}
 
 
 def load_run(npz_path):
@@ -65,7 +79,7 @@ def load_run(npz_path):
     return out
 
 
-def bootstrap_ci(prob, lbl, seqid, n_boot, rng, paired_with=None):
+def bootstrap_ci(prob, lbl, seqid, n_boot, rng, paired_with=None, metric=None):
     """
     Resample sequence IDs with replacement (n draws from n unique sequences),
     then build the resampled pixel set by ACTUALLY DUPLICATING each drawn
@@ -84,6 +98,7 @@ def bootstrap_ci(prob, lbl, seqid, n_boot, rng, paired_with=None):
     distribution directly (paired bootstrap) -- tighter and more honest
     than independently bootstrapping each run and subtracting percentiles.
     """
+    pr_auc = metric or globals()["pr_auc"]   # default keeps the original trapezoid metric
     uniq = np.unique(seqid)
     idx_by_seq = {s: np.where(seqid == s)[0] for s in uniq}
     point = pr_auc(prob, lbl)
@@ -132,6 +147,9 @@ def main():
                         "compare against (paired bootstrap on the delta).")
     p.add_argument("--dt_min", type=int, default=10)
     p.add_argument("--n_boot", type=int, default=1000)
+    p.add_argument("--metric", choices=["pr_auc", "ap"], default="pr_auc",
+                   help="pr_auc = trapezoidal area (original headline metric); "
+                        "ap = average precision (non-interpolated, recommended).")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
@@ -154,7 +172,7 @@ def main():
     print("-" * 40)
     for t in steps:
         prob, lbl, seqid = main_run[t]
-        r = bootstrap_ci(prob, lbl, seqid, args.n_boot, rng)
+        r = bootstrap_ci(prob, lbl, seqid, args.n_boot, rng, metric=METRICS[args.metric])
         print(f"  +{(t+1)*args.dt_min:3d}m  {r['point']:>8.4f}  "
               f"[{r['ci_lo']:.4f}, {r['ci_hi']:.4f}]")
 
@@ -169,7 +187,8 @@ def main():
             prob, lbl, seqid = main_run[t]
             bprob, blbl, bseqid = base_run[t]
             r = bootstrap_ci(prob, lbl, seqid, args.n_boot, rng,
-                             paired_with=(bprob, blbl, bseqid))
+                             paired_with=(bprob, blbl, bseqid),
+                             metric=METRICS[args.metric])
             base_pt = r['point'] - r['delta_point']
             sig = "*" if (np.isfinite(r['delta_ci_lo']) and
                          (r['delta_ci_lo'] > 0 or r['delta_ci_hi'] < 0)) else " "
