@@ -1,0 +1,25 @@
+analysis_regimes.py:
+(1) Initiation vs continuation
+  initiation   + 10m  base=0.0009  diffusion=0.0353  persistence=0.0026  pysteps_li=0.0039  pysteps_ir=0.0011  cnn=0.0573  lightgbm=0.0100
+  initiation   + 20m  base=0.0020  diffusion=0.0755  persistence=0.0034  pysteps_li=0.0067  pysteps_ir=0.0022  cnn=0.0954  lightgbm=0.0174
+  initiation   + 30m  base=0.0036  diffusion=0.0917  persistence=0.0051  pysteps_li=0.0102  pysteps_ir=0.0039  cnn=0.1129  lightgbm=0.0239
+  initiation   + 40m  base=0.0044  diffusion=0.1305  persistence=0.0063  pysteps_li=0.0137  pysteps_ir=0.0056  cnn=0.1620  lightgbm=0.0288
+  initiation   + 50m  base=0.0062  diffusion=0.1574  persistence=0.0079  pysteps_li=0.0180  pysteps_ir=0.0087  cnn=0.1895  lightgbm=0.0347
+  initiation   + 60m  base=0.0087  diffusion=0.1872  persistence=0.0105  pysteps_li=0.0244  pysteps_ir=0.0133  cnn=0.2237  lightgbm=0.0411
+  continuation + 10m  base=0.3165  diffusion=0.8529  persistence=0.7892  pysteps_li=0.7885  pysteps_ir=0.8100  cnn=0.8778  lightgbm=0.8337
+  continuation + 20m  base=0.3101  diffusion=0.8089  persistence=0.7101  pysteps_li=0.7017  pysteps_ir=0.7248  cnn=0.8379  lightgbm=0.7543
+  continuation + 30m  base=0.2979  diffusion=0.7616  persistence=0.6286  pysteps_li=0.6187  pysteps_ir=0.6347  cnn=0.7944  lightgbm=0.6729
+  continuation + 40m  base=0.2914  diffusion=0.7382  persistence=0.5627  pysteps_li=0.5638  pysteps_ir=0.5672  cnn=0.7721  lightgbm=0.6089
+  continuation + 50m  base=0.2771  diffusion=0.7053  persistence=0.4921  pysteps_li=0.5025  pysteps_ir=0.5022  cnn=0.7409  lightgbm=0.5305
+  continuation + 60m  base=0.2684  diffusion=0.6924  persistence=0.4381  pysteps_li=0.4602  pysteps_ir=0.4607  cnn=0.7295  lightgbm=0.4757
+  -> manuscript/analysis/regime_initiation_continuation.csv
+
+(2) Calibration / Brier
+  -> manuscript/analysis/calibration_brier.csv
+
+(3) Diurnal
+  -> manuscript/analysis/diurnal_skill.csv
+
+(4) Per region
+  -> manuscript/analysis/region_skill.csv
+  figures -> manuscript/analysis/fig7_*.png, fig8_*.png, figS_*.png
