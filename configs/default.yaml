@@ -113,7 +113,7 @@ oversample_factor:  5.0    # top-density sequences oversampled N×
 density_percentile: 75.0   # 75th percentile LI density threshold
 
 # Binary LI context channel — Ravuri et al. 2021
-# Appends (li >= 1/255) as extra channel to each context frame
+# Appends (AFA >= 1) as extra channel to each context frame
 binary_li_ctx:   true              # explicit binary LI mask per context frame
 
 # ctx_channels: which channels to include in context (null = all channels)
@@ -135,4 +135,4 @@ resume:          false             # new architecture: in_ch 188->112 (2ch, drop
 wandb_project:   "DDIM-LI"
 
 # LI event threshold for binarisation (evaluation only)
-li_event_threshold: 0.0196   # 5/255
+li_event_threshold: 0.00196078   # 0.5/255 = AFA >= 1 (any lightning); AFA>=5 sensitivity: 0.017647 (4.5/255)

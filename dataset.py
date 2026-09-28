@@ -177,6 +177,13 @@ def stem_to_prefix(stem: str) -> str:
 # (it means no flashes), so LI is never size-filtered.
 MIN_IR_BYTES = 3000
 
+# Lightning event definition (v2 data: LI pixel value = LI-2 AFA flash count,
+# physical = count / 255). 0.5/255 = "AFA >= 1" (any lightning in the 10-min
+# window), halfway between 0 and 1 so float round-trips cannot flip a pixel.
+# Used for the binary-LI context mask and the per-sequence lightning density
+# (oversampling); scripts' --li_event_threshold defaults to the same value.
+LI_EVENT_THRESHOLD = 0.5 / 255.0
+
 
 def _is_usable(path: Path, ch: str, min_bytes: int = MIN_IR_BYTES) -> bool:
     """
@@ -490,7 +497,7 @@ class METSATDataset(Dataset):
             li_phys   = li_abs * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-            li_density = float((li_phys >= 5.0/255.0).mean())  # aligned to li_event_threshold
+            li_density = float((li_phys >= LI_EVENT_THRESHOLD).mean())  # event definition
         else:
             li_density = 0.0
 
@@ -499,7 +506,7 @@ class METSATDataset(Dataset):
         # forcing the model to predict LI purely from cloud structure.
         ctx = context[:, self.ctx_idx, :, :]   # (T_in, C_ctx_sel, H, W)
 
-        # Binary LI context: append (li >= 1/255) as extra channel per context frame.
+        # Binary LI context: append (li >= LI_EVENT_THRESHOLD) as extra channel per context frame.
         # Only appended if LI is included in ctx_channels.
         # Following Ravuri et al. 2021 (DGMR) explicit rain mask conditioning.
         _li_in_ctx = (li_idx is not None and li_idx in self.ctx_idx)
@@ -509,8 +516,8 @@ class METSATDataset(Dataset):
             li_phys = li_norm * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-            li_bin  = (li_phys >= 5.0 / 255.0).astype(np.float32)    # (T_in, H, W)
-            # threshold=5/255 consistent with li_event_threshold in evaluation
+            li_bin  = (li_phys >= LI_EVENT_THRESHOLD).astype(np.float32)    # (T_in, H, W)
+            # 'any lightning' (AFA >= 1): the input mask does not change with the evaluated event
             context_out = np.concatenate(
                 [ctx, li_bin[:, None, :, :]], axis=1                  # (T_in, C_ctx+1, H, W)
             )

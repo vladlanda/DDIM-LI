@@ -64,7 +64,7 @@ def parse_args():
     p.add_argument("--channels", nargs="+", default=None)
     p.add_argument("--binary_li_ctx", type=lambda x: x.lower() == "true", default=None)
     p.add_argument("--ctx_channels", nargs="+", default=None)
-    p.add_argument("--li_event_threshold", type=float, default=5.0 / 255.0,
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0,
                    help="Matches the CNN baseline's default exactly -- see "
                         "that script's help text for the physical-space "
                         "rationale (cbrt preserves zero exactly).")

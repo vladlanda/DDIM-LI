@@ -154,7 +154,7 @@ def parse_args():
                         "practical compute-budget safeguard, since best.pt "
                         "is already checkpointed by lowest val_loss "
                         "regardless of when/whether this triggers.")
-    p.add_argument("--li_event_threshold", type=float, default=5.0/255.0)
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
     p.add_argument("--base_channels", type=int, default=None)
     p.add_argument("--channel_mults", nargs="+", type=int, default=None)
     p.add_argument("--num_res_blocks", type=int, default=None)

@@ -107,7 +107,7 @@ def main():
                    help="Neighbourhood radii (px) to test for pooled PR-AUC.")
     p.add_argument("--max_shift", type=int, default=4,
                    help="Max global shift (px) for best-shift PR-AUC.")
-    p.add_argument("--li_event_threshold", type=float, default=5.0/255.0)
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
     p.add_argument("--output_csv", default=None,
                    help="If set, save the per-lead-time results table "
                         "(exact/base_rate/near{X}km/best_shift) to this "

@@ -1,3 +1,17 @@
+> **dataretrain branch (2026-09-28) -- EVENT DEFINITION DECIDED.** Primary event:
+> any lightning, LI-2 AFA >= 1 flash covering the pixel in the 10-min window
+> (li_event_threshold = 0.5/255; v2 LI pixel value = AFA flash count). Chosen
+> because it is physical and parameter-free, hazard-relevant (a single strike is
+> dangerous), consistent with the comparators' occurrence targets (to verify),
+> and the harder test (weak/isolated/initiating lightning). Sensitivity analysis:
+> AFA >= 5 (4.5/255) -- evaluation-only for the diffusion model; retrain CNN and
+> LightGBM at that threshold for a fair comparison. Diffusion prediction
+> threshold = event threshold unless denoiser haze inflates false alarms, in
+> which case tune on VALIDATION only and report it. Single source of truth:
+> dataset.LI_EVENT_THRESHOLD (binary-LI input mask, sampling weights); all
+> scripts' --li_event_threshold default to the same value. Numbers below this
+> note refer to the OLD data and will be replaced.
+
 # Path to Submission — Checklist
 
 Working document tracking what's needed before submission. Update status

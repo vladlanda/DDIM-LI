@@ -102,7 +102,7 @@ def parse_args():
     p.add_argument("--S_churn", type=float, default=40.0)
     p.add_argument("--S_noise", type=float, default=1.003)
     p.add_argument("--num_steps", type=int, default=20)
-    p.add_argument("--li_event_threshold", type=float, default=5.0 / 255.0)
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
     p.add_argument("--gpu", type=int, default=0)
     args = p.parse_args()
 

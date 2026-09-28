@@ -283,7 +283,7 @@ def train(args):
     # li_event_threshold is in physical space [0,1]. Convert:
     #   physical → cbrt → z-score using per-dataset LI statistics
     # This ensures training threshold matches evaluation threshold exactly.
-    _li_thresh = getattr(args, "li_event_threshold", 5.0/255.0)
+    _li_thresh = getattr(args, "li_event_threshold", 0.5 / 255.0)
     if "li" in channels and "li" in stats:
         _cbrt   = float(_li_thresh ** (1.0/3.0))
         _mean   = stats["li"]["mean"]

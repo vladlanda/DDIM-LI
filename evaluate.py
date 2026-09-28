@@ -441,7 +441,7 @@ def evaluate_epoch(
     n_members:    int   = 10,
     val_samples:  int   = -1,      # batches to evaluate; -1 = full val set
     cfg_scale:    float = 1.5,
-    li_event_threshold: float = 5.0/255.0,
+    li_event_threshold: float = 0.5 / 255.0,
     dt_min:       int   = 10,
 ) -> Dict[str, float]:
     """
@@ -631,7 +631,7 @@ def fast_val_metrics(
     device:       "torch.device",
     channels:     List[str],
     val_samples:  int   = -1,      # batches to use; -1 = full val set
-    li_event_threshold: float = 5.0/255.0,
+    li_event_threshold: float = 0.5 / 255.0,
 ) -> Dict[str, float]:
     """
     Cheap validation metrics for use every training epoch.
@@ -1670,7 +1670,7 @@ def run_test_evaluation(args):
 
                 if li_idx is not None:
                     # Convert to physical space and threshold at li_event_threshold
-                    # (default 5/255 — rejects denoiser background noise)
+                    # (default 0.5/255 = AFA >= 1, any lightning; tune on VALIDATION only if denoiser haze inflates false alarms)
                     obs_phys  = _li_to_physical(tgt_t[li_idx], stats)
                     ens_phys  = np.stack([_li_to_physical(ens_t[m, li_idx], stats)
                                           for m in range(ens_t.shape[0])])
@@ -2042,10 +2042,11 @@ if __name__ == "__main__":
                         "before computing FSS (the only metric that still needs a "
                         "fixed threshold — all others sweep thresholds internally). "
                         "Each value gives one FSS curve on the spatial-scale plot.")
-    p.add_argument("--li_event_threshold", type=float, default=5.0/255.0,
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0,
                    help="LI binarisation threshold in physical space [0,1]. "
-                        "Default=5/255=0.0196: requires at least 5 flash counts, "
-                        "rejecting sub-threshold denoiser background noise. "
+                        "Default 0.5/255 = AFA >= 1 (any lightning; v2 data store the "
+                        "LI-2 AFA flash count). If denoiser background haze inflates "
+                        "false alarms, tune on VALIDATION data only. "
                         "Applies to both GT and ensemble binarisation.")
     p.add_argument("--gpu",           type=int,   default=0)
     p.add_argument("--plot",          action="store_true",

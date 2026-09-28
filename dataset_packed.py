@@ -32,7 +32,7 @@ from torch.utils.data import Dataset
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dataset import (
-    build_valid_starts, compute_or_load_stats, CHANNEL_FILL_VALUES
+    build_valid_starts, compute_or_load_stats, CHANNEL_FILL_VALUES, LI_EVENT_THRESHOLD
 )
 
 logger = logging.getLogger(__name__)
@@ -235,7 +235,7 @@ class PackedMETSATDataset(Dataset):
             li_phys = li_abs * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-            li_density = float((li_phys >= 5.0/255.0).mean())
+            li_density = float((li_phys >= LI_EVENT_THRESHOLD).mean())
         else:
             li_density = 0.0
 
@@ -248,7 +248,7 @@ class PackedMETSATDataset(Dataset):
             li_phys = li_norm * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
-            li_bin = (li_phys >= 5.0 / 255.0).astype(np.float32)
+            li_bin = (li_phys >= LI_EVENT_THRESHOLD).astype(np.float32)
             context_out = np.concatenate([ctx, li_bin[:, None, :, :]], axis=1)
         else:
             context_out = ctx

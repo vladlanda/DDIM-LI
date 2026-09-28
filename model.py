@@ -540,7 +540,7 @@ def asymmetric_li_loss(
         alpha          : FP cost relative to FN (0.1 → FP penalised at 10%%).
         li_idx         : index of LI channel
         norm_threshold : threshold in ABSOLUTE normalised space.
-                         norm_threshold=0.16 ≈ 5/255 in physical space.
+                         norm_threshold=0.16 is a fallback only; train.py derives it from li_event_threshold and the data stats.
     """
     # Convert residuals to absolute normalised values
     pred_abs_li   = pred[:, li_idx]   + last_ctx[:, li_idx]   # (B, H, W)

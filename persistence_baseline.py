@@ -347,7 +347,7 @@ def parse_args():
     p.add_argument("--img_size",   nargs=2, type=int, default=[256, 256])
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--num_workers",type=int, default=4)
-    p.add_argument("--li_event_threshold", type=float, default=5.0/255.0)
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
     p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
                    default=[0.1, 0.3, 0.5])
     args = p.parse_args()

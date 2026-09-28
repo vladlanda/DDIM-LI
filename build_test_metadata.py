@@ -72,7 +72,7 @@ def parse_args():
     p.add_argument("--img_size", nargs=2, type=int, default=[256, 256])
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--num_workers", type=int, default=4)
-    p.add_argument("--li_event_threshold", type=float, default=5.0 / 255.0)
+    p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
     p.add_argument("--recent_frames", type=int, default=3,
                    help="Context frames defining 'recent' activity (3 = 30 min).")
     args = p.parse_args()

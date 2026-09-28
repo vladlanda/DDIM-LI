@@ -118,14 +118,14 @@ def add_arguments(parser: argparse.ArgumentParser):
                         help="Channels to include in context. Default=None uses all. "
                              "Example: --ctx_channels ir ch0 ch1 excludes LI from context.")
     parser.add_argument("--binary_li_ctx",   type=_bool, default=True,
-                        help="Add a binary (>=5/255) LI channel to context frames. "
+                        help="Add a binary (AFA >= 1, i.e. >= 0.5/255) LI channel to context frames. "
                              "Gives the model an explicit spatial prior on where "
                              "lightning was occurring. Following Ravuri et al. 2021.")
     # -- LI event threshold (training + evaluation) --
-    parser.add_argument("--li_event_threshold", type=float, default=5.0/255.0,
+    parser.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0,
                         help="LI binarisation threshold in physical space [0,1]. "
-                             "5/255=0.0196: requires >=5 flash counts, rejects "
-                             "JPEG artefacts and denoiser background noise. "
+                             "Default 0.5/255 = AFA >= 1 (any lightning; v2 data store "
+                             "the LI-2 AFA flash count). AFA>=5 sensitivity: 4.5/255. "
                              "Used in both asymmetric_li_loss (training) and "
                              "evaluation metrics.")
     parser.add_argument("--n_members",       type=int,   default=10)
