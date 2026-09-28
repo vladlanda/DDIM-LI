@@ -16,3 +16,5 @@ manuscript/latex/*.log
 manuscript/latex/*.out
 manuscript/latex/*.blg
 manuscript/latex/*.synctex.gz
+
+manuscript/*.npz
