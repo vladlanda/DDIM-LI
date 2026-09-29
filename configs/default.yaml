@@ -50,6 +50,9 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
+augment_flip:      false           # east-west flip of training samples. OFF: Central/West African
+                                  # convective systems propagate predominantly westward (mid-level
+                                  # easterlies), so mirrored samples are unrealistic. Same for ALL models.
 sigma_data:        0.66            # measured on v2 data (check_residual_stats.py, pooled over 4 regions, 1200 seqs): RMS of residual targets; ir std 0.42, li std 0.83
                                   # set (out_channels changed 4->2, RMS of residuals changes).
                                   # Run: python check_residual_stats.py <train_roots>

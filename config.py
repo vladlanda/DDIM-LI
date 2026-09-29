@@ -122,6 +122,8 @@ def add_arguments(parser: argparse.ArgumentParser):
                              "Gives the model an explicit spatial prior on where "
                              "lightning was occurring. Following Ravuri et al. 2021.")
     # -- LI event threshold (training + evaluation) --
+    parser.add_argument("--augment_flip", type=lambda x: str(x).lower() in ("1", "true", "yes"),
+                        default=False, help="East-west flip augmentation of training samples (default off).")
     parser.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0,
                         help="LI binarisation threshold in physical space [0,1]. "
                              "Default 0.5/255 = AFA >= 1 (any lightning; v2 data store "

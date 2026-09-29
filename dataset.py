@@ -684,6 +684,7 @@ def make_dataloaders(
     max_samples:       Optional[int] = None,
     train_val_split:   float = 0.7,
     oversample_factor:  float = 5.0,
+    augment_flip:       bool  = False,
     density_percentile: float = 75.0,
     binary_li_ctx:      bool  = True,
     ctx_channels:       Optional[List[str]] = None,
@@ -734,7 +735,7 @@ def make_dataloaders(
         # Train part: reuse the existing dataset object
         train_ds = ds
         train_ds.valid_sequences = train_seqs
-        train_ds.augment         = True
+        train_ds.augment         = bool(augment_flip)   # east-west flip; off by default (see configs)
         train_parts.append(train_ds)
 
         # Val part: shallow-copy (shares index/stats, no re-scan)

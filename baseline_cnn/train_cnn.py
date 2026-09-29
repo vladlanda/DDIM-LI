@@ -161,6 +161,8 @@ def parse_args():
     p.add_argument("--attn_resolutions", nargs="+", type=int, default=None)
     p.add_argument("--emb_dim", type=int, default=None)
     p.add_argument("--output_dir", required=True)
+    p.add_argument("--augment_flip", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=None,
+                   help="East-west flip augmentation (default from --config, else off).")
     p.add_argument("--resume", nargs="?", const="__auto__", default=None,
                    help="Resume from a checkpoint. Bare --resume auto-uses "
                         "<output_dir>/latest.pt. Or give an explicit path: "
@@ -258,6 +260,7 @@ def main():
             stats_roots=args.train_roots,   # original JPEG roots, for stats
             train_val_split=args.train_val_split,
             binary_li_ctx=args.binary_li_ctx, ctx_channels=args.ctx_channels,
+            augment_flip=bool(args.augment_flip),
             preload_to_ram=args.preload_to_ram,
         )
     else:
@@ -267,6 +270,7 @@ def main():
             batch_size=args.batch_size, num_workers=args.num_workers,
             train_val_split=args.train_val_split,
             binary_li_ctx=args.binary_li_ctx, ctx_channels=args.ctx_channels,
+            augment_flip=bool(args.augment_flip),
         )
     channels = args.channels
     li_idx = channels.index("li")
