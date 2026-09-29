@@ -175,6 +175,38 @@ class EMA:
 # Distributed DataLoader factory
 # ===================================================================
 
+class DistributedWeightedSampler(torch.utils.data.Sampler):
+    """Weighted sampling with replacement, sharded across DDP ranks.
+
+    Every rank draws the SAME global index sequence (generator seeded by
+    seed + epoch) and keeps every world_size-th element, so ranks see disjoint
+    shards of one weighted draw -- the multi-GPU equivalent of the single-GPU
+    WeightedRandomSampler. Previously DDP replaced the weighted sampler by a
+    uniform DistributedSampler, silently disabling density oversampling for the
+    diffusion model (trained on 2 GPUs) while the CNN (1 GPU) kept it.
+    """
+    def __init__(self, weights, num_replicas: int, rank: int, seed: int = 0):
+        self.weights      = torch.as_tensor(weights, dtype=torch.double)
+        self.num_replicas = num_replicas
+        self.rank         = rank
+        self.seed         = seed
+        self.epoch        = 0
+        self.num_samples  = len(self.weights) // num_replicas
+
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
+
+    def __iter__(self):
+        g = torch.Generator()
+        g.manual_seed(self.seed + self.epoch)
+        idx = torch.multinomial(self.weights, self.num_samples * self.num_replicas,
+                                replacement=True, generator=g)
+        return iter(idx[self.rank::self.num_replicas].tolist())
+
+    def __len__(self):
+        return self.num_samples
+
+
 def make_distributed_loaders(args, local_rank: int, world_size: int):
     """
     Wraps make_dataloaders to inject DistributedSampler when DDP is active.
@@ -213,19 +245,20 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
     # (Cui et al. 2019) still operates per-sample inside training_loss.
     from torch.utils.data import DataLoader
     import logging as _log
-    _log.getLogger(__name__).warning(
-        "DDP mode: WeightedRandomSampler replaced by DistributedSampler. "
-        "Density-based sequence oversampling is disabled. "
-        "Dynamic li_weight (per-sample) remains active."
-    )
-
-    train_sampler = DistributedSampler(
-        train_loader.dataset,
-        num_replicas = world_size,
-        rank         = local_rank,
-        shuffle      = True,
-        drop_last    = True,
-    )
+    _weights = getattr(train_loader.sampler, "weights", None)
+    if _weights is not None:
+        train_sampler = DistributedWeightedSampler(_weights, num_replicas=world_size,
+                                                   rank=local_rank)
+        _log.getLogger(__name__).info(
+            "DDP mode: density oversampling kept via DistributedWeightedSampler.")
+    else:
+        train_sampler = DistributedSampler(
+            train_loader.dataset,
+            num_replicas = world_size,
+            rank         = local_rank,
+            shuffle      = True,
+            drop_last    = True,
+        )
     val_sampler = DistributedSampler(
         val_loader.dataset,
         num_replicas = world_size,

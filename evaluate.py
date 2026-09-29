@@ -162,25 +162,24 @@ def crps_energy(
     obs:      np.ndarray,   # (...) same shape sans M
 ) -> float:
     """
-    CRPS via energy score decomposition (Gneiting & Raftery 2007):
-      CRPS = E[|X - y|] - (1/2) * E[|X - X'|]
-
-    E[|X - X'|] is the mean over ALL M² pairs (diagonal = 0) — i.e.
-    divide by M², not by M(M-1)/2.  Dividing by unique pairs only is a
-    biased estimator that under-penalises spread.
-
-    The Python loop over unique pairs is kept intentionally: for small M
-    (typically 10) numpy broadcast allocates an (M,M,C,H,W) tensor whose
-    memory cost and allocation overhead exceeds the loop cost at this scale.
+    Ensemble CRPS, FAIR estimator (Ferro 2014; Gneiting & Raftery 2007 kernel form):
+      CRPS = mean|X_i - y| - 1/(2 M (M-1)) * sum_{i != j} |X_i - X_j|
+    The M(M-1) normalisation makes the estimator unbiased for the CRPS of the
+    distribution the members are drawn from, so scores are comparable across
+    ensemble sizes. (An earlier version divided by M^2 -- the CRPS of the
+    empirical M-member distribution -- which is biased high for small M:
+    +10% at M=10, +2% at M=50 in a known-answer test; its comment wrongly
+    called that version unbiased.)
     """
     M     = ensemble.shape[0]
-    term1 = np.abs(ensemble - obs[None]).mean(axis=0)   # (C,H,W)
-    # Sum unique pairs, then scale to the M² mean: sum_unique * 2 / M²
+    term1 = np.abs(ensemble - obs[None]).mean(axis=0)
+    if M < 2:
+        return float(term1.mean())
     diffs = 0.0
     for i in range(M):
         for j in range(i + 1, M):
             diffs += np.abs(ensemble[i] - ensemble[j])
-    term2 = diffs * 2.0 / (M * M)                       # ÷ M²  (unbiased)
+    term2 = diffs * 2.0 / (M * (M - 1))                 # mean over ordered pairs i != j
     return float((term1 - 0.5 * term2).mean())
 
 
@@ -379,33 +378,53 @@ def crps_decomposition(
     return results
 
 
-def fss(
+def fss_parts(
     pred_bin:  np.ndarray,   # (H, W) binary forecast field
     obs_bin:   np.ndarray,   # (H, W) binary observation field
     scale:     int = 1,
-) -> float:
-    """
-    Fractions Skill Score (Roberts & Lean 2008).
+):
+    """(MSE, MSE_ref) of the Fractions Skill Score for one image.
 
-    FSS = 1 - MSE(smoothed_pred, smoothed_obs) / MSE_ref
-    where MSE_ref = mean(smoothed_pred²) + mean(smoothed_obs²)
-
-    scale: neighbourhood half-width in pixels.
-           FSS at scale=1 is pixel-level; larger scale forgives displacement.
+    scale = neighbourhood HALF-WIDTH in pixels: window (2*scale+1)^2, so
+    scale=0 is pixel-wise and scale=1 is 3x3. (Previously scale=1 was treated
+    as pixel-wise while scale=2 was 5x5, inconsistent with the half-width
+    definition and with the (2s+1)*pixel_km axis labels.)
     """
     from scipy.ndimage import uniform_filter
-    if scale <= 1:
+    if scale <= 0:
         p_frac = pred_bin.astype(float)
         o_frac = obs_bin.astype(float)
     else:
         size   = 2 * scale + 1
-        p_frac = uniform_filter(pred_bin.astype(float), size=size)
-        o_frac = uniform_filter(obs_bin.astype(float),  size=size)
-
+        p_frac = uniform_filter(pred_bin.astype(float), size=size, mode="constant")
+        o_frac = uniform_filter(obs_bin.astype(float),  size=size, mode="constant")
     mse     = float(np.mean((p_frac - o_frac) ** 2))
     mse_ref = float(np.mean(p_frac ** 2) + np.mean(o_frac ** 2))
+    return mse, mse_ref
+
+
+def fss_aggregate(parts) -> float:
+    """FSS over many images: 1 - sum(MSE) / sum(MSE_ref) (Roberts & Lean 2008,
+    aggregated form). Averaging per-image FSS instead gives every image without
+    forecast or observed events a score of 1, inflating FSS for quiet scenes."""
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return float("nan")
+    mse = sum(p[0] for p in parts)
+    ref = sum(p[1] for p in parts)
+    return float(1.0 - mse / ref) if ref > 1e-12 else float("nan")
+
+
+def fss(
+    pred_bin:  np.ndarray,
+    obs_bin:   np.ndarray,
+    scale:     int = 1,
+) -> float:
+    """Single-image FSS (Roberts & Lean 2008); NaN when neither field has events.
+    For scores over a dataset use fss_parts + fss_aggregate."""
+    mse, mse_ref = fss_parts(pred_bin, obs_bin, scale)
     if mse_ref < 1e-10:
-        return 1.0
+        return float("nan")
     return float(1.0 - mse / mse_ref)
 
 
@@ -425,7 +444,14 @@ def spread_skill(
     # Spread = sqrt(mean spatial variance) — Fortin et al. 2014, MWR.
     # Must use sqrt(mean(var)) NOT mean(std):
     # mean(std) < sqrt(mean(var)) by Jensen's inequality, biasing ratio low.
-    spread = float(np.sqrt(np.var(ens_np, axis=0).mean()))
+    # Finite-ensemble correction (Fortin et al. 2014): for an exchangeable M-member
+    # ensemble E[MSE(ens mean)] = (M+1)/M * sigma^2, so the spread term is the
+    # unbiased variance (ddof=1) scaled by (M+1)/M. Without it a PERFECT ensemble
+    # scores sqrt((M-1)/(M+1)): 0.905 at M=10, 0.981 at M=50 (verified).
+    M      = ens_np.shape[0]
+    if M < 2:
+        return float("nan")
+    spread = float(np.sqrt(np.var(ens_np, axis=0, ddof=1).mean() * (M + 1) / M))
     skill  = float(np.sqrt(np.mean((ens_np.mean(axis=0) - tgt_np) ** 2)))
     return spread / (skill + 1e-8)
 
@@ -1581,8 +1607,10 @@ def run_test_evaluation(args):
 
     # ---- Accumulators ----
     # CRPS / spread-skill: single scalar per (sample, step)
-    crps_by_step = [[] for _ in range(T_out)]
+    crps_by_step = [[] for _ in range(T_out)]      # LI, physical units
     ss_by_step   = [[] for _ in range(T_out)]
+    crps_ir_by_step = [[] for _ in range(T_out)]   # first non-LI channel (IR), normalised
+    ss_ir_by_step   = [[] for _ in range(T_out)]
 
     # Per-channel cloud metrics: dict[ch] -> list-per-step -> list of scalars
     # keys: "rmse", "mae", "ssim"  (ssim only if HAS_SKIMAGE)
@@ -1655,8 +1683,18 @@ def run_test_evaluation(args):
                 tgt_t    = tgt_np[b, t]      # (C, H, W)    absolute normalised
                 ens_mean = ens_t.mean(axis=0)
 
-                crps_by_step[t].append(crps_energy(ens_t, tgt_t))
-                ss_by_step[t].append(spread_skill(ens_t, tgt_t))
+                # CRPS / spread-skill PER CHANNEL. "crps"/"spread_skill" = LI in
+                # PHYSICAL units (AFA/255); IR in normalised units as *_ir.
+                # (Previously all channels were pooled in normalised space, so
+                # the numbers were dominated by the dense IR field.)
+                if li_idx is not None:
+                    ens_li = _li_to_physical(ens_t[:, li_idx], stats)
+                    tgt_li = _li_to_physical(tgt_t[li_idx], stats)
+                    crps_by_step[t].append(crps_energy(ens_li, tgt_li))
+                    ss_by_step[t].append(spread_skill(ens_li, tgt_li))
+                for _ci in cloud_idxs[:1]:
+                    crps_ir_by_step[t].append(crps_energy(ens_t[:, _ci], tgt_t[_ci]))
+                    ss_ir_by_step[t].append(spread_skill(ens_t[:, _ci], tgt_t[_ci]))
 
                 if cloud_idxs:
                     cm = cloud_metrics(ens_mean, tgt_t, cloud_idxs,
@@ -1691,7 +1729,7 @@ def run_test_evaluation(args):
                         pred_bin_thr = (pred_prob >= thr).astype(np.float32)
                         for s in fss_scales:
                             fss_by_thr_scale_step[thr][s][t].append(
-                                fss(pred_bin_thr, obs_bin, scale=s)
+                                fss_parts(pred_bin_thr, obs_bin, scale=s)
                             )
 
                     if t in pr_steps:
@@ -1767,11 +1805,21 @@ def run_test_evaluation(args):
         except Exception:
             pass
 
+    # Aggregate FSS over all images (sum of MSE / sum of MSE_ref); the list is
+    # replaced by ONE value so every downstream _mean(...) call stays valid.
+    for _thr in fss_by_thr_scale_step:
+        for _s in fss_by_thr_scale_step[_thr]:
+            for _t in range(T_out):
+                _parts = fss_by_thr_scale_step[_thr][_s][_t]
+                fss_by_thr_scale_step[_thr][_s][_t] = [fss_aggregate(_parts)] if _parts else []
+
     per_step = []
     for t in range(T_out):
         row = {"lead_min": lead_times[t],
                "crps":     _mean(crps_by_step[t]),
-               "spread_skill": _mean(ss_by_step[t])}
+               "spread_skill": _mean(ss_by_step[t]),
+               "crps_ir":  _mean(crps_ir_by_step[t]),
+               "spread_skill_ir": _mean(ss_ir_by_step[t])}
         for ch in cloud_chs:
             row[f"rmse_{ch}"] = _mean(rmse_by_ch_step[ch][t])
             row[f"mae_{ch}"]  = _mean(mae_by_ch_step[ch][t])

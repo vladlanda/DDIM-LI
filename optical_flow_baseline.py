@@ -74,6 +74,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from evaluate import (
+    fss_parts, fss_aggregate,
     _li_to_physical, crps_energy, lightning_skill_curve, fss, spread_skill
 )
 from dataset import make_test_loader, denormalize
@@ -275,11 +276,11 @@ def run_optical_flow_evaluation(args):
 
                     for thr in args.fss_prob_thresholds:
                         pred_bin = (pred_prob >= thr).astype(float)
-                        fss_val  = fss(pred_bin, obs_bin, scale=1)
+                        fss_val  = fss_parts(pred_bin, obs_bin, scale=0)   # pixel-wise (half-width 0)
                         fss_by_step[thr][t].append(fss_val)
 
                     stride    = max(1, obs_bin.size // 4096)
-                    flat_prob = pred_prob.ravel()[::stride]
+                    flat_prob = pred_phys.ravel()[::stride]   # raw value: per-image max rescaling distorted the pooled ranking
                     flat_lbl  = obs_bin.ravel()[::stride]
                     pr_probs[t].append(flat_prob)
                     pr_labels[t].append(flat_lbl)
@@ -364,7 +365,7 @@ def run_optical_flow_evaluation(args):
             row["far_at_max"] = _mean(far_max_vals)
 
         for thr in args.fss_prob_thresholds:
-            row[f"fss_{thr}"] = _mean(fss_by_step[thr][t])
+            row[f"fss_{thr}"] = fss_aggregate(fss_by_step[thr][t])
 
         if t in auc_by_step:
             row["pr_auc"] = auc_by_step[t]

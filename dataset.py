@@ -72,10 +72,11 @@ CHANNEL_FILL_VALUES = {
 # Statistics (computed once, stored as JSON next to the dataset)
 # -------------------------------------------------------------------
 def compute_or_load_stats(
-    root: str,
+    root,
     channel_list: List[str],
     stat_path: Optional[str] = None,
     n_samples: int = 2000,
+    seed: int = 0,
 ) -> Dict[str, Dict[str, float]]:
     """Return per-channel mean/std (or median/iqr for LI).
     Results are saved to stat_path so they are only computed once.
@@ -87,8 +88,17 @@ def compute_or_load_stats(
 
     logger.info(f"  Computing channel statistics (first run — will be cached) …")
     accum     = defaultdict(list)
-    all_files = list(Path(root).rglob("*.png")) or list(Path(root).rglob("*.jpg"))  # v2 data: PNG
-    np.random.shuffle(all_files)
+    # root may be a single folder or a list of folders (pooled over ALL training
+    # regions). The file list is sorted and shuffled with a FIXED seed, so every
+    # process/script computes identical stats -- previously an unseeded shuffle
+    # gave each run (and each DDP rank, and the CNN vs diffusion model) slightly
+    # different stats, which flipped labels at the event threshold.
+    roots     = [root] if isinstance(root, (str, Path)) else list(root)
+    all_files = []
+    for r in roots:
+        files = sorted(Path(r).rglob("*.png")) or sorted(Path(r).rglob("*.jpg"))  # v2 data: PNG
+        all_files.extend(files)
+    np.random.default_rng(seed).shuffle(all_files)
     sample    = all_files[:n_samples]
 
     for fp in tqdm(sample, desc="  Computing stats", unit="img",
@@ -446,7 +456,12 @@ class METSATDataset(Dataset):
 
         for i, ch in enumerate(self.channel_list):
             if ch not in chs:
-                frame[i] = CHANNEL_FILL_VALUES.get(ch, 0.0)
+                if self._cbrt_mask[i]:
+                    # physical 0 (no lightning) -> cbrt(0)=0 -> (0 - mean)/std.
+                    # Filling z-score 0 would mean "the mean LI value", not "none".
+                    frame[i] = -self._norm_mean[i] / self._norm_std[i]
+                else:
+                    frame[i] = CHANNEL_FILL_VALUES.get(ch, 0.0)
                 continue
             img = Image.open(chs[ch]).convert("L")
             if img.size != (w, h):
@@ -638,10 +653,13 @@ def compute_li_sample_weights(
 
     # ── Pass 2: assign weights based on density percentile ──────────────────
     threshold   = float(np.percentile(densities, density_percentile))
-    weights     = np.where(densities >= threshold,
-                           float(oversample_factor), 1.0).astype(np.float64)
+    # If >= density_percentile of sequences have zero density the percentile is 0
+    # and '>=' would oversample EVERY sequence (a silent no-op). Use '>' then,
+    # i.e. oversample every sequence with any lightning.
+    high        = densities > threshold if threshold <= 0.0 else densities >= threshold
+    weights     = np.where(high, float(oversample_factor), 1.0).astype(np.float64)
 
-    n_high = int((densities >= threshold).sum())
+    n_high = int(high.sum())
     n_low  = len(dataset) - n_high
     logger.info(
         f"  LI density threshold (p{density_percentile:.0f}): {threshold:.4f} "
@@ -685,10 +703,14 @@ def make_dataloaders(
 
     # Build each region dataset once, then slice valid_sequences in-place.
     # No second construction pass — avoids duplicate index scanning and logs.
+    # One set of normalisation stats, pooled over ALL training regions, shared by
+    # every region (previously each region computed its own unless a stat_path
+    # cache existed, while only region 1's stats were saved with the model).
+    pooled_stats = compute_or_load_stats(train_roots, channel_list, stat_path=stat_path)
     full_ds = MultiRegionDataset(
         train_roots, channel_list=channel_list,
         T_in=T_in, T_out=T_out, img_size=img_size,
-        stat_path=stat_path, augment=False,
+        stats=pooled_stats, stat_path=stat_path, augment=False,
         max_samples=max_samples,
         binary_li_ctx=binary_li_ctx,
         ctx_channels=ctx_channels,
@@ -705,7 +727,9 @@ def make_dataloaders(
         n_train  = max(1, int(n * train_val_split))
 
         train_seqs = all_seqs[:n_train]        # slice BEFORE any mutation
-        val_seqs   = all_seqs[n_train:]
+        # Sequences overlap (stride 1): skip T_in+T_out sequences after the split so
+        # no validation sequence shares frames with a training sequence.
+        val_seqs   = all_seqs[n_train + T_in + T_out:]
 
         # Train part: reuse the existing dataset object
         train_ds = ds

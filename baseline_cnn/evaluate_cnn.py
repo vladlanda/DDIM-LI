@@ -55,7 +55,7 @@ from sklearn.calibration import calibration_curve as _cal_curve
 from sklearn.metrics import auc as _auc
 
 try:
-    from evaluate import lightning_skill_curve, fss
+    from evaluate import lightning_skill_curve, fss, fss_parts, fss_aggregate
 except ImportError:
     lightning_skill_curve = fss = None
 
@@ -405,7 +405,7 @@ def main():
                             p_bin_thr = (p >= thr).astype(float)
                             for s in args.fss_scales:
                                 fss_by_thr_scale_step[thr][s][t].append(
-                                    fss(p_bin_thr, o, scale=s))
+                                    fss_parts(p_bin_thr, o, scale=s))
 
                     stride = max(1, o.size // 4096)
                     flat_p = p.ravel()[::stride]
@@ -471,7 +471,7 @@ def main():
             row["csi_max"] = _mean(csi_max_vals)
         for thr in args.fss_prob_thresholds:
             for s in args.fss_scales:
-                row[f"fss_{thr}_scale{s}"] = _mean(fss_by_thr_scale_step[thr][s][t])
+                row[f"fss_{thr}_scale{s}"] = fss_aggregate(fss_by_thr_scale_step[thr][s][t])  # aggregated over images
         if t in auc_by_step:
             row["pr_auc"] = auc_by_step[t]
         per_step.append(row)

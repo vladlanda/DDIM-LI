@@ -333,12 +333,18 @@ def make_dataloaders_packed(
 
     assert 0.0 < train_val_split < 1.0
     stats_roots = stats_roots or [None] * len(train_packed_dirs)
+    # One set of stats pooled over ALL training regions (same as dataset.make_dataloaders),
+    # computed deterministically from the original image folders.
+    from pathlib import Path as _P
+    pooled_stats = compute_or_load_stats(
+        [r or str(_P(d).parent) for r, d in zip(stats_roots, train_packed_dirs)],
+        channel_list, stat_path=stat_path)
 
     datasets = []
     for packed_dir, stats_root in zip(train_packed_dirs, stats_roots):
         ds = PackedMETSATDataset(
             packed_dir, channel_list=channel_list, T_in=T_in, T_out=T_out,
-            dt_min=dt_min, stat_path=stat_path, stats_root=stats_root,
+            dt_min=dt_min, stats=pooled_stats, stat_path=stat_path, stats_root=stats_root,
             augment=False, max_samples=max_samples,
             binary_li_ctx=binary_li_ctx, ctx_channels=ctx_channels,
             preload_to_ram=preload_to_ram,
@@ -351,7 +357,8 @@ def make_dataloaders_packed(
         all_seqs = ds.valid_sequences
         n = len(all_seqs)
         n_train = max(1, int(n * train_val_split))
-        train_seqs, val_seqs = all_seqs[:n_train], all_seqs[n_train:]
+        # skip T_in+T_out overlapping sequences so val shares no frames with train
+        train_seqs, val_seqs = all_seqs[:n_train], all_seqs[n_train + T_in + T_out:]
 
         train_ds = ds
         train_ds.valid_sequences = train_seqs
