@@ -50,7 +50,7 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
-sigma_data:        0.68            # PLACEHOLDER — MUST be re-measured for this channel
+sigma_data:        0.66            # measured on v2 data (check_residual_stats.py, pooled over 4 regions, 1200 seqs): RMS of residual targets; ir std 0.42, li std 0.83
                                   # set (out_channels changed 4->2, RMS of residuals changes).
                                   # Run: python check_residual_stats.py <train_roots>
                                   # Typical range for normalised residuals: 0.2-0.5.
