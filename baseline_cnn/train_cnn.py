@@ -300,7 +300,7 @@ def main():
 
     start_epoch = 0
     best_val = float("inf")
-    if args.resume is not None:
+    if args.resume is not None and args.resume != False:
         ckpt_path = (os.path.join(args.output_dir, "latest.pt")
                     if args.resume == "__auto__" else args.resume)
         if not os.path.isfile(ckpt_path):
