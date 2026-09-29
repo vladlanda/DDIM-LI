@@ -1,12 +1,13 @@
 > **Code review (2026-09-29), BEFORE retraining on v2 data -- open decisions**
 > (code bugs found in the same review are fixed; see commit message):
-> 1. `sigma_data` = 0.68 is a placeholder. Measure on the new data:
+> 1. [DONE: sigma_data = 0.66 measured on v2 data] `sigma_data` = 0.68 was a placeholder. Measure on the new data:
 >    `python check_residual_stats.py <train roots> --channels ir li --T_in 36 --T_out 6`
 >    and set the reported RMS in configs/default.yaml.
 > 2. `cfg_scale` (1.5) and `S_churn` (40, at the Karras cap for 20 steps) change
 >    the sampled distribution (guidance > 1 trades spread for sharpness). Choose on
 >    VALIDATION data (e.g. CRPS/reliability), or use cfg_scale 1.0; report them.
-> 3. Horizontal (east-west) flip augmentation mirrors the prevailing westward
+> 3. [DECIDED 2026-09-29: OFF by default for all models, config augment_flip; an
+>    ablation can re-enable it] Horizontal (east-west) flip augmentation mirrors the prevailing westward
 >    propagation of Central/West African convective systems. Either disable it or
 >    justify it with a validation ablation.
 > 4. The auxiliary losses (asymmetric FN>FP, neighbourhood, spectral) change the

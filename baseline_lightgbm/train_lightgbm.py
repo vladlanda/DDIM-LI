@@ -56,6 +56,8 @@ def parse_args():
     p.add_argument("--config", required=True)
     p.add_argument("--train_roots", nargs="+", default=None)
     p.add_argument("--output_dir", required=True)
+    p.add_argument("--augment_flip", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=None,
+                   help="East-west flip augmentation (default from --config, else off).")
 
     p.add_argument("--T_in", type=int, default=None)
     p.add_argument("--T_out", type=int, default=None)
@@ -112,7 +114,7 @@ def parse_args():
 
 def _resolve_config(args):
     cfg = load_yaml(args.config)
-    for k in ["train_roots", "T_in", "T_out", "dt_min", "img_size", "channels",
+    for k in ["augment_flip", "train_roots", "T_in", "T_out", "dt_min", "img_size", "channels",
               "binary_li_ctx", "ctx_channels", "batch_size", "train_val_split"]:
         if getattr(args, k) is None and k in cfg:
             setattr(args, k, cfg[k])
@@ -206,6 +208,7 @@ def main():
         train_val_split=args.train_val_split,
         binary_li_ctx=args.binary_li_ctx,
         ctx_channels=args.ctx_channels,
+        augment_flip=bool(args.augment_flip),
     )
     li_idx = args.channels.index("li")
     logger.info(f"Extracting TRAIN features (up to {args.max_train_batches} batches, "

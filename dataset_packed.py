@@ -321,6 +321,7 @@ def make_dataloaders_packed(
     density_percentile: float = 75.0,
     binary_li_ctx:      bool = True,
     ctx_channels:        Optional[List[str]] = None,
+    augment_flip:        bool = False,
     preload_to_ram:      bool = False,
 ):
     """
@@ -362,7 +363,7 @@ def make_dataloaders_packed(
 
         train_ds = ds
         train_ds.valid_sequences = train_seqs
-        train_ds.augment = True
+        train_ds.augment = bool(augment_flip)   # east-west flip; off by default
         train_parts.append(train_ds)
 
         val_ds = copy.copy(ds)
@@ -434,6 +435,7 @@ def make_test_loader_packed(
     stat_path:          Optional[str] = None,
     binary_li_ctx:      bool = True,
     ctx_channels:        Optional[List[str]] = None,
+    augment_flip:        bool = False,
     preload_to_ram:      bool = False,
 ):
     from torch.utils.data import DataLoader

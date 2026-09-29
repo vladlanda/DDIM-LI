@@ -228,6 +228,7 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
         max_samples       = args.max_samples,
         train_val_split   = args.train_val_split,
         oversample_factor  = args.oversample_factor,
+        augment_flip       = bool(getattr(args, "augment_flip", False)),
         density_percentile = args.density_percentile,
         binary_li_ctx      = args.binary_li_ctx,
         ctx_channels       = args.ctx_channels,
