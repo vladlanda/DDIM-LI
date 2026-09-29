@@ -578,7 +578,7 @@ def neighbourhood_li_loss(
 
     Args:
         scales : kernel sizes for avg_pool2d (in pixels).
-                 k=5 ≈ 20km, k=11 ≈ 44km at 4km/pixel resolution.
+                 k=5 ≈ 16km, k=11 ≈ 35km at ~3.14 km/pixel.
     """
     # Spatial consistency on residuals is correct — a spatially smooth
     # residual produces a spatially smooth absolute prediction.
@@ -618,8 +618,13 @@ def spectral_loss(
         mask = ch_mask[:, ci].float()
         if mask.sum() < 1:
             continue
-        p_fft = torch.fft.rfft2(pred[:, ci])
-        t_fft = torch.fft.rfft2(target[:, ci])
+        # norm="ortho": Parseval-normalised, so the term is on the same scale as a
+        # per-pixel MSE. The default (norm="backward") left the forward FFT
+        # unscaled -- squared magnitude differences grow with H*W, making this
+        # term ~3e4x the per-pixel MSE at 256x256 and, with spectral_weight=0.5,
+        # dominating the IR gradient ~1.6e4-fold over the denoising loss.
+        p_fft = torch.fft.rfft2(pred[:, ci],   norm="ortho")
+        t_fft = torch.fft.rfft2(target[:, ci], norm="ortho")
         err   = ((p_fft.abs() - t_fft.abs()) ** 2) * mask[:, None, None]
         loss  = loss + err.mean()
         count += 1

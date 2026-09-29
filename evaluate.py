@@ -235,6 +235,35 @@ def cloud_metrics(
 # Lightning-specific metrics (binary events)
 # ===================================================================
 
+def pooled_categorical_scores(prob, lbl, thresholds, key_suffix=None,
+                              probabilistic=True):
+    """CSI / POD / FAR from ONE contingency table pooled over all images
+    (the standard; averaging per-image ratios lets event-free images, which score
+    0 by convention, pull the averages down). Also: csi_max = best CSI over a
+    SINGLE global threshold (per-image maxima are an oracle choice), and the
+    pooled Brier score when prob is a probability.
+
+    key_suffix: override the threshold part of the key (e.g. "event")."""
+    prob = np.asarray(prob, dtype=np.float64).ravel()
+    lbl  = np.asarray(lbl).ravel().astype(bool)
+    out = {}
+    for thr in thresholds:
+        f  = prob >= thr
+        tp = int(np.sum(f & lbl)); fp = int(np.sum(f & ~lbl)); fn = int(np.sum(~f & lbl))
+        k  = key_suffix if key_suffix is not None else thr
+        out[f"csi_{k}"] = tp / (tp + fp + fn) if (tp + fp + fn) else float("nan")
+        out[f"pod_{k}"] = tp / (tp + fn) if (tp + fn) else float("nan")
+        out[f"far_{k}"] = fp / (tp + fp) if (tp + fp) else float("nan")
+    if probabilistic and lbl.any():
+        from sklearn.metrics import precision_recall_curve
+        p, r, _ = precision_recall_curve(lbl, prob)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            csi = np.where((p > 0) & (r > 0), 1.0 / (1.0 / p + 1.0 / r - 1.0), 0.0)
+        out["csi_max"] = float(np.max(csi))
+        out["brier"] = float(np.mean((np.clip(prob, 0, 1) - lbl) ** 2))
+    return out
+
+
 def lightning_skill_curve(
     pred_prob: np.ndarray,   # (H*W,) or (H, W) ensemble probability in [0,1]
     obs_bin:   np.ndarray,   # (H*W,) or (H, W) binary 0/1 ground truth
@@ -686,8 +715,13 @@ def fast_val_metrics(
         chosen_fast = None
         budget_fast = total_batches
     else:
-        chosen_fast = set(random.sample(range(total_batches), val_samples))
+        chosen_fast = set(random.Random(0).sample(range(total_batches), val_samples))
         budget_fast = val_samples
+
+    # FIXED draws (same batches, lead times, sigmas and noise every epoch), so the
+    # checkpoint criterion is comparable across epochs instead of partly reflecting
+    # which epoch happened to draw easy noise levels. Seeded per rank.
+    _gen = torch.Generator().manual_seed(1234 + (dist_mod.get_rank() if ddp else 0))
 
     # Accumulators: sum and count kept as GPU tensors for efficient all_reduce.
     # Layout: [loss_sum, mse_sum, mae_sum, li_mse_sum, n_batches, n_li_batches]
@@ -715,12 +749,12 @@ def fast_val_metrics(
         tgt_mask = batch["tgt_mask"].to(device)
 
         B, T_out, C, H, W = target.shape
-        lead_idx = torch.randint(0, T_out, (B,), device=device)
+        lead_idx = torch.randint(0, T_out, (B,), generator=_gen).to(device)
         y        = target[torch.arange(B), lead_idx]
         ch_mask  = tgt_mask[torch.arange(B), lead_idx]
 
-        sigma   = schedule.sample_sigma(B, device)
-        x_noisy = y + torch.randn_like(y) * sigma[:, None, None, None]
+        sigma   = (torch.randn(B, generator=_gen) * schedule.P_std + schedule.P_mean).exp().to(device)
+        x_noisy = y + torch.randn(y.shape, generator=_gen).to(device) * sigma[:, None, None, None]
         pred    = model(x_noisy, sigma, context, ch_mask, lead_idx)
 
         # val_loss: EDM-weighted (comparable to train_loss)
@@ -1873,6 +1907,13 @@ def run_test_evaluation(args):
                 if t in auc_by_step:
                     row["pr_auc"] = auc_by_step[t]
         per_step.append(row)
+
+
+    # Replace per-image-averaged categorical scores by POOLED contingency scores.
+    for _t, _row in enumerate(per_step):
+        if _t in pr_probs and len(pr_probs[_t]):
+            _row.update(pooled_categorical_scores(
+                np.concatenate(pr_probs[_t]), np.concatenate(pr_labels[_t]), fss_prob_thresholds))
 
     # Horizon buckets scaled by ACTUAL T_out*dt_min, not hardcoded step counts.
     # Previously used crps_arr[:6]/[:18]/[-1] assuming dt_min=10 and a long

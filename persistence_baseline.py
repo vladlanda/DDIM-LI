@@ -48,7 +48,7 @@ except ImportError:
 # Reuse helpers from evaluate.py
 sys.path.insert(0, os.path.dirname(__file__))
 from evaluate import (
-    fss_parts, fss_aggregate,
+    fss_parts, fss_aggregate, pooled_categorical_scores,
     _li_to_physical, crps_energy, lightning_skill_curve, fss, spread_skill
 )
 from dataset import make_test_loader, denormalize
@@ -310,6 +310,13 @@ def run_persistence_evaluation(args):
         per_step.append(row)
 
     # ── Save CSV
+    # Replace per-image-averaged categorical scores by POOLED contingency scores.
+    for _t, _row in enumerate(per_step):
+        if _t in pr_probs and len(pr_probs[_t]):
+            _row.update(pooled_categorical_scores(
+                np.concatenate(pr_probs[_t]), np.concatenate(pr_labels[_t]), [args.li_event_threshold],
+                key_suffix="event", probabilistic=False))
+
     csv_path = os.path.join(args.output_dir, "persistence_metrics.csv")
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=per_step[0].keys())

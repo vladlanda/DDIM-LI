@@ -398,12 +398,17 @@ def main():
                 target   = batch["target"].to(device, non_blocking=True)
                 last_ctx = batch["last_ctx"].to(device, non_blocking=True)
                 B, T_out_b = context.shape[0], target.shape[1]
-                lead_idx = torch.randint(0, T_out_b, (B,), device=device)
-                tgt_abs = target[torch.arange(B), lead_idx] + last_ctx
-                li_phys = _li_to_physical_torch(tgt_abs[:, li_idx], stats)
-                li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)
-                logits = model(context, lead_idx)
-                batch_loss = F.binary_cross_entropy_with_logits(logits, li_bin).item()
+                # ALL lead times, deterministically (was one random lead per
+                # sample, which made val_loss -- the checkpoint and LR-schedule
+                # criterion -- noisy from epoch to epoch).
+                batch_loss = 0.0
+                for _lead in range(T_out_b):
+                    lead_idx = torch.full((B,), _lead, device=device, dtype=torch.long)
+                    tgt_abs = target[:, _lead] + last_ctx
+                    li_phys = _li_to_physical_torch(tgt_abs[:, li_idx], stats)
+                    li_bin = (li_phys >= args.li_event_threshold).float().unsqueeze(1)
+                    logits = model(context, lead_idx)
+                    batch_loss += F.binary_cross_entropy_with_logits(logits, li_bin).item() / T_out_b
                 val_loss += batch_loss
                 val_bar.set_postfix(loss=f"{batch_loss:.4f}")
         val_loss /= max(len(val_loader), 1)

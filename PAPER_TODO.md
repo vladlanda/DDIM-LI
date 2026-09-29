@@ -15,6 +15,14 @@
 > 5. Each lead time is sampled with independent noise: a member is NOT a coherent
 >    1-h scenario. Per-lead metrics are fine; "any lightning within the next hour"
 >    must not be computed by combining leads within a member.
+> 7. The diffusion checkpoint criterion (fast_val_metrics) evaluates the RAW
+>    weights, but evaluation loads the EMA weights saved in the checkpoint. Best
+>    practice: validate the EMA model. Needs care with the 2-GPU barrier layout
+>    (EMA lives on rank 0 only); not changed yet.
+> 8. The spectral loss was ~3e4x mis-scaled (unnormalised FFT) and dominated the
+>    IR gradient; now fixed. The loss balance of any earlier run therefore differs
+>    from what the Methods describe -- the retrain is the first run with the
+>    intended weighting. spectral_weight=0.5 may deserve a quick check.
 > 6. `crps_decomposition` in evaluate.py is not a valid decomposition (its "REL"
 >    is a PIT-histogram flatness score). It is unused; do not report it. Use
 >    Hersbach (2000) if a decomposition is wanted.

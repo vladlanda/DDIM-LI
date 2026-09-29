@@ -39,7 +39,7 @@ from sklearn.calibration import calibration_curve as _cal_curve
 from sklearn.metrics import auc as _auc
 
 try:
-    from evaluate import lightning_skill_curve, fss, fss_parts, fss_aggregate
+    from evaluate import lightning_skill_curve, fss, fss_parts, fss_aggregate, pooled_categorical_scores
 except ImportError:
     lightning_skill_curve = fss = None
 
@@ -217,6 +217,12 @@ def main():
         if t in auc_by_step:
             row["pr_auc"] = auc_by_step[t]
         per_step.append(row)
+
+    # Replace per-image-averaged categorical scores by POOLED contingency scores.
+    for _t, _row in enumerate(per_step):
+        if _t in pr_probs and len(pr_probs[_t]):
+            _row.update(pooled_categorical_scores(
+                np.concatenate(pr_probs[_t]), np.concatenate(pr_labels[_t]), args.fss_prob_thresholds))
 
     csv_path = os.path.join(args.output_dir, "baseline_lightgbm_metrics.csv")
     with open(csv_path, "w", newline="") as f:
