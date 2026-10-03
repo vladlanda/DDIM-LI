@@ -782,6 +782,10 @@ def make_dataloaders(
         f"Total — train: {len(train_combined)} sequences, "
         f"val: {len(val_combined)} sequences"
     )
+    if len(val_combined) == 0:
+        logger.warning("VALIDATION SET IS EMPTY (each region needs more than T_in+T_out "
+                       "sequences after the split, e.g. a larger max_samples); "
+                       "val_loss will be NaN and no best checkpoint is selected.")
 
     # Stratified sequence sampling: oversample lightning-active sequences.
     # Uses WeightedRandomSampler which is compatible with DDP (train.py

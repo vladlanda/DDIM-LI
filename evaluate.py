@@ -802,9 +802,11 @@ def fast_val_metrics(
     n       = acc[4].item()
     n_li    = acc[5].item()
     metrics = {
-        "val_loss": acc[0].item() / max(n, 1),
-        "val_mse":  acc[1].item() / max(n, 1),
-        "val_mae":  acc[2].item() / max(n, 1),
+        # No validation batches -> NaN, never 0.0: an empty validation set must not
+        # look like a perfect model (it was saved as "new best" in a smoke test).
+        "val_loss": acc[0].item() / n if n > 0 else float("nan"),
+        "val_mse":  acc[1].item() / n if n > 0 else float("nan"),
+        "val_mae":  acc[2].item() / n if n > 0 else float("nan"),
     }
     if n_li > 0:
         metrics["val_li_mse"] = acc[3].item() / n_li
