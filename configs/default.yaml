@@ -35,7 +35,7 @@ channels:
   - ir
   - li
 
-T_in:    36         # context frames  (18 × 10 min = 3 hours)
+T_in:    36         # context frames  (36 × 10 min = 6 hours)
 T_out:   6          # forecast steps  (6  × 10 min = 1 hour)
 dt_min:  10
 img_size: [256, 256]
@@ -133,7 +133,8 @@ val_samples:  -1
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/nature_256_T36_ir_li_only
+output_dir:      outputs/v2_ir_li          # NEW folder for v2 data: train.py caches channel_stats.json here,
+                                          # so reusing the old run's folder would load the OLD data's stats
 resume:          false             # new architecture: in_ch 188->112 (2ch, dropped ch0/ch1)
 wandb_project:   "DDIM-LI"
 
