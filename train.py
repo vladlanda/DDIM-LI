@@ -341,7 +341,11 @@ def train(args):
         )
 
     # EMA lives only on rank 0 (no need to sync across GPUs)
-    ema = EMA(model, decay=args.ema_decay) if main else None
+    # EMA on EVERY rank: DDP keeps parameters identical after each step and the
+    # update is deterministic, so all ranks hold identical shadows. That lets
+    # validation run on the EMA weights on all ranks (the weights evaluation
+    # loads), instead of the raw weights; only rank 0 saves it.
+    ema = EMA(model, decay=args.ema_decay)
 
     schedule = EDMSchedule(
         P_mean     = args.P_mean,
@@ -366,7 +370,7 @@ def train(args):
         ckpt = torch.load(ckpt_path, map_location=device)
         raw_model.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
-        if main and ema is not None and "ema" in ckpt:
+        if ema is not None and ckpt.get("ema"):
             ema.load_state_dict(ckpt["ema"])
         start_epoch = ckpt["epoch"] + 1
         best_val    = ckpt.get("best_val", best_val)
@@ -495,7 +499,7 @@ def train(args):
             scaler.step(opt)
             scaler.update()
 
-            if main and ema is not None:
+            if ema is not None:
                 ema.update(model)
 
             total_loss += loss.item()
@@ -533,6 +537,14 @@ def train(args):
         if ddp_active():
             dist.barrier()
 
+        # Validate the EMA weights -- the weights evaluation loads (ckpt["ema"]) --
+        # so the checkpoint is selected for the weights that are reported.
+        # Swap them in, validate, restore the training weights.
+        _swap_ema = ema is not None and getattr(args, "val_use_ema", True)
+        if _swap_ema:
+            _train_weights = {k: v.detach().clone() for k, v in raw_model.state_dict().items()}
+            raw_model.load_state_dict(ema.state_dict())
+
         # Every epoch: cheap forward-pass denoising metrics (both ranks).
         val_metrics = fast_val_metrics(
             raw_model, val_loader, schedule, device,
@@ -551,6 +563,10 @@ def train(args):
                 dt_min      = args.dt_min,
             )
             val_metrics.update(slow_metrics)
+
+        if _swap_ema:
+            raw_model.load_state_dict(_train_weights)
+            del _train_weights
 
         # Checkpoint + logging — rank 0 only.
         if main:

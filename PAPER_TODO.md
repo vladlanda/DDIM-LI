@@ -16,7 +16,8 @@
 > 5. Each lead time is sampled with independent noise: a member is NOT a coherent
 >    1-h scenario. Per-lead metrics are fine; "any lightning within the next hour"
 >    must not be computed by combining leads within a member.
-> 7. The diffusion checkpoint criterion (fast_val_metrics) evaluates the RAW
+> 7. [FIXED 2026-09-29: EMA kept on all ranks, swapped in for validation; config
+>    val_use_ema, default true] The diffusion checkpoint criterion (fast_val_metrics) evaluates the RAW
 >    weights, but evaluation loads the EMA weights saved in the checkpoint. Best
 >    practice: validate the EMA model. Needs care with the 2-GPU barrier layout
 >    (EMA lives on rank 0 only); not changed yet.
