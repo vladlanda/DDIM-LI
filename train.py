@@ -450,7 +450,10 @@ def train(args):
 
     for epoch in epoch_bar:
         # Tell DistributedSampler which epoch we're on so shuffling differs
-        if ddp_active() and hasattr(train_loader, "sampler"):
+        # Only distributed samplers have set_epoch. torchrun with ONE process still
+        # initialises a process group, but then uses the plain WeightedRandomSampler
+        # (make_distributed_loaders returns early for world_size == 1).
+        if hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
 
         model.train()
