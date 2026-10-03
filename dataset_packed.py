@@ -231,7 +231,11 @@ class PackedMETSATDataset(Dataset):
 
         li_idx = self.channel_list.index("li") if "li" in self.channel_list else None
         if li_idx is not None:
-            li_abs  = target_abs[:, li_idx]
+            # INPUT-based (last context frame), not target-based: weighting by the target
+        # makes lightning-rich OUTCOMES look more frequent than they are, biasing the
+        # learned p(future | past) towards over-forecasting; weighting by the input
+        # focuses training on active scenes without distorting that distribution.
+            li_abs  = last_ctx[0, li_idx]   # last_ctx = context[-1:] -> (1, C, H, W)
             li_phys = li_abs * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
@@ -289,8 +293,11 @@ def compute_li_sample_weights_packed(dataset, oversample_factor=5.0,
 
     densities = np.zeros(len(dataset), dtype=np.float32)
     for i, seq_times in enumerate(dataset.valid_sequences):
-        target_times = seq_times[dataset.T_in:]
-        mid_t = target_times[len(target_times) // 2]
+        # INPUT-based (last context frame), not target-based: weighting by the target
+        # makes lightning-rich OUTCOMES look more frequent than they are, biasing the
+        # learned p(future | past) towards over-forecasting; weighting by the input
+        # focuses training on active scenes without distorting that distribution.
+        mid_t = seq_times[dataset.T_in - 1]       # last context frame
         row = dataset._row_of.get(mid_t)
         if row is None or dataset._mask[row, packed_li_idx] == 0:
             continue

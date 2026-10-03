@@ -94,16 +94,16 @@ li_weight_ref_density: 0.06     # mean LI density of training set (measured)
 
 # Asymmetric FP/FN loss — Gao et al. 2022
 # Reduces FAR by penalising false positives less than false negatives early in training
-asym_weight:     1.0
+asym_weight:     0.0   # primary model: pure EDM denoising objective (see PAPER_TODO, decision 4); ablation: set > 0
 asym_alpha:      0.05   # FP penalised at 5% of FN cost — more aggressive with LI in ctx
 
 # Neighbourhood spatial loss — Zhang et al. 2023
 # Penalises spatial displacement; directly improves FSS
-nbr_weight:      0.5               # increased: residuals smaller with LI in context
+nbr_weight:      0.0   # primary model: pure EDM denoising objective (see PAPER_TODO, decision 4); ablation: set > 0
 nbr_scales:      [5, 11]   # kernel sizes in pixels (≈20km and ≈44km at 4km/px)
 
 # Spectral loss — applied to IR/cloud channels only (not LI)
-spectral_weight: 0.5
+spectral_weight: 0.0   # primary model: pure EDM denoising objective (see PAPER_TODO, decision 4); ablation: set > 0
 
 # Lead-time weighted sampling
 # Oversample harder long-range steps to improve +60min skill.

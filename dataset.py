@@ -508,7 +508,11 @@ class METSATDataset(Dataset):
         if li_idx is not None:
             # target_abs in normalised space: zero cbrt(LI) normalised = -mean/std
             # but we want physical > 0, so use target_abs before residual:
-            li_abs    = target_abs[:, li_idx]          # (T_out, H, W) normalised abs
+            # INPUT-based (last context frame), not target-based: weighting by the target
+        # makes lightning-rich OUTCOMES look more frequent than they are, biasing the
+        # learned p(future | past) towards over-forecasting; weighting by the input
+        # focuses training on active scenes without distorting that distribution.
+            li_abs    = last_ctx[0, li_idx]               # (H, W) normalised abs, last context frame
             li_phys   = li_abs * self._norm_std[li_idx] + self._norm_mean[li_idx]
             if self._cbrt_mask[li_idx]:
                 li_phys = np.power(np.clip(li_phys, 0.0, None), 3)
@@ -632,9 +636,11 @@ def compute_li_sample_weights(
         leave = False,
         dynamic_ncols = True,
     )):
-        target_times = seq_times[dataset.T_in:]   # T_out target timestamps
-        # Use the middle target frame as representative
-        mid_t = target_times[len(target_times) // 2]
+        # INPUT-based (last context frame), not target-based: weighting by the target
+        # makes lightning-rich OUTCOMES look more frequent than they are, biasing the
+        # learned p(future | past) towards over-forecasting; weighting by the input
+        # focuses training on active scenes without distorting that distribution.
+        mid_t = seq_times[dataset.T_in - 1]       # last context frame
 
         if mid_t not in dataset.index:
             continue

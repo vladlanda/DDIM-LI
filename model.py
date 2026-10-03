@@ -506,7 +506,12 @@ def channel_weighted_mse(
     per_px  = (pred - target) ** 2
     mask_4d = ch_mask[:, :, None, None]
     w_4d    = weights[:, :, None, None]
-    return (per_px * mask_4d * w_4d).sum() / (mask_4d * w_4d).sum().clamp(min=1)
+    # Denominator must count PIXELS too: mask_4d / w_4d have size 1 in H, W, so
+    # their plain sum omitted the H*W factor and the loss was a pixel SUM
+    # (65,536x a mean at 256x256), dwarfing the auxiliary losses (which are means)
+    # and forcing gradient clipping on every step.
+    wm = (mask_4d * w_4d).expand_as(per_px)
+    return (per_px * wm).sum() / wm.sum().clamp(min=1)
 
 
 def asymmetric_li_loss(

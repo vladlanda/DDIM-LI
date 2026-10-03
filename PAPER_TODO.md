@@ -10,7 +10,10 @@
 >    ablation can re-enable it] Horizontal (east-west) flip augmentation mirrors the prevailing westward
 >    propagation of Central/West African convective systems. Either disable it or
 >    justify it with a validation ablation.
-> 4. The auxiliary losses (asymmetric FN>FP, neighbourhood, spectral) change the
+> 4. [DECIDED 2026-10-03: weights 0 for the primary model = pure EDM denoising;
+>    full loss = ablation. Rationale: earlier runs effectively had asym/nbr OFF
+>    (65,536x weighted-MSE scale bug), posterior sampling underpins the
+>    calibration claims, fewer arbitrary hyperparameters] The auxiliary losses (asymmetric FN>FP, neighbourhood, spectral) change the
 >    optimum of the denoiser away from E[y | x_sigma], so samples are no longer from
 >    the model's posterior. Keep the planned loss ablation (full vs denoising-only).
 > 5. Each lead time is sampled with independent noise: a member is NOT a coherent
