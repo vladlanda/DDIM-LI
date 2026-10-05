@@ -10,7 +10,7 @@
 # ============================================================
 
 # ---------- tuneable knobs ----------
-NUM_GPUS=2
+NUM_GPUS=1
 CONFIG="configs/default.yaml"
 # OMP threads per process: total physical cores / NUM_GPUS
 # Adjust to match your CPU (run `nproc` to check)
