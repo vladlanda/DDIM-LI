@@ -19,7 +19,8 @@ across our own baselines isolates model CLASS as the controlled variable
 in our internal comparisons, which matters more here than matching any
 one piece of external literature's exact protocol.
 
-Class imbalance handled via LightGBM's native `is_unbalance=True` (not
+Class imbalance: the oversampled loader (input-based density) -- like the CNN.
+`is_unbalance` is OFF by default (was True; see --is_unbalance) (not
 manual pixel oversampling) -- the idiomatic LightGBM approach, avoids
 introducing a second, undocumented imbalance-handling mechanism alongside
 the CNN baseline's WeightedRandomSampler oversampling.
@@ -102,6 +103,10 @@ def parse_args():
 
     p.add_argument("--num_boost_round", type=int, default=2000)
     p.add_argument("--early_stopping_rounds", type=int, default=50)
+    p.add_argument("--is_unbalance", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=False,
+                   help="LightGBM class reweighting. Default OFF: training pixels already come from the "
+                        "oversampled loader and the CNN uses unweighted BCE; reweighting on top "
+                        "double-corrects and distorts probabilities (calibration/Brier).")
     p.add_argument("--num_leaves", type=int, default=63)
     p.add_argument("--learning_rate", type=float, default=0.05)
     p.add_argument("--min_child_samples", type=int, default=100)
@@ -228,17 +233,21 @@ def main():
     val_set = lgb.Dataset(X_val, label=y_val, feature_name=FEATURE_NAMES, reference=train_set)
 
     params = dict(
-        objective="binary", metric=["binary_logloss", "auc"],
+        # Early stopping on AVERAGE PRECISION only (the paper's metric; first_metric_only).
+        # Previously it watched binary_logloss as well and stopped as soon as either
+        # stalled; with is_unbalance the validation log-loss worsens almost at once, so
+        # training stopped after ~5 trees (best_iteration=5 on v2 data).
+        objective="binary", metric=["average_precision", "binary_logloss"],
         num_leaves=args.num_leaves, learning_rate=args.learning_rate,
         min_child_samples=args.min_child_samples,
         feature_fraction=args.feature_fraction, bagging_fraction=args.bagging_fraction,
-        bagging_freq=args.bagging_freq, is_unbalance=True, seed=args.seed, verbose=-1,
+        bagging_freq=args.bagging_freq, is_unbalance=bool(args.is_unbalance), seed=args.seed, verbose=-1,
     )
     logger.info(f"Training LightGBM: {params}")
     booster = lgb.train(
         params, train_set, num_boost_round=args.num_boost_round,
         valid_sets=[train_set, val_set], valid_names=["train", "val"],
-        callbacks=[lgb.early_stopping(args.early_stopping_rounds, verbose=True),
+        callbacks=[lgb.early_stopping(args.early_stopping_rounds, first_metric_only=True, verbose=True),
                   lgb.log_evaluation(period=50)],
     )
 
