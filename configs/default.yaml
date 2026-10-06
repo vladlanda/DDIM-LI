@@ -50,7 +50,7 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
-epoch_fraction:    0.1             # each epoch draws 10% of the weighted training sequences (with
+epoch_fraction:    0.33             # each epoch draws 10% of the weighted training sequences (with
                                   # replacement); every sequence stays eligible every epoch. Full pass
                                   # over ~144k stride-1 sequences is otherwise ~9k steps per epoch.
 use_packed:        false           # true after preprocess_to_memmap.py for every training region
@@ -97,7 +97,7 @@ cfg_drop_prob:   0.15
 # Channel weighting — Cui et al. 2019 effective number formula
 li_weight:       20.0
 li_weight_beta:  0.9999
-li_weight_ref_density: 0.06     # mean LI density of training set (measured)
+li_weight_ref_density: 0.0359     # mean LI density of training set (measured)
 
 # Asymmetric FP/FN loss — Gao et al. 2022
 # Reduces FAR by penalising false positives less than false negatives early in training
@@ -140,7 +140,7 @@ val_samples:  200   # validation batches per epoch: a FIXED seeded subset (compa
 n_members:    1
 cfg_scale:    1.5
 
-output_dir:      outputs/v2_ir_li          # NEW folder for v2 data: train.py caches channel_stats.json here,
+output_dir:      outputs/v2/ir_li          # NEW folder for v2 data: train.py caches channel_stats.json here,
                                           # so reusing the old run's folder would load the OLD data's stats
 resume:          false             # new architecture: in_ch 188->112 (2ch, dropped ch0/ch1)
 wandb_project:   "DDIM-LI"
