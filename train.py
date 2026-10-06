@@ -356,6 +356,18 @@ def train(args):
     local_rank, world_size, device = setup_ddp()
     main = is_main(local_rank)
 
+    # Global seeding (was absent: initial weights, the 1-GPU weighted sampler,
+    # noise levels/noise and guidance dropout all came from unseeded generators,
+    # so runs -- and ablations -- were not reproducible). Offset per rank so the
+    # GPUs draw different noise. cuDNN kernels may still be non-deterministic.
+    import random as _random
+    import numpy as _np
+    _seed = int(getattr(args, "seed", 0)) + local_rank
+    _random.seed(_seed)
+    _np.random.seed(_seed)
+    torch.manual_seed(_seed)
+    torch.cuda.manual_seed_all(_seed)
+
     if main:
         os.makedirs(args.output_dir, exist_ok=True)
         logger.info(f"World size: {world_size}  |  device: {device}")
