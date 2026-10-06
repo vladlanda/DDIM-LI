@@ -691,6 +691,7 @@ def make_dataloaders(
     train_val_split:   float = 0.7,
     oversample_factor:  float = 5.0,
     augment_flip:       bool  = False,
+    epoch_fraction:     float = 1.0,
     density_percentile: float = 75.0,
     binary_li_ctx:      bool  = True,
     ctx_channels:       Optional[List[str]] = None,
@@ -807,7 +808,9 @@ def make_dataloaders(
     ])
     train_sampler = WeightedRandomSampler(
         weights     = torch.from_numpy(all_weights).double(),
-        num_samples = len(train_combined),
+        # epoch_fraction: each epoch draws this fraction of the weighted training
+        # sequences (with replacement); every sequence stays eligible every epoch
+        num_samples = max(1, int(round(len(train_combined) * float(epoch_fraction)))),
         replacement = True,
     )
 

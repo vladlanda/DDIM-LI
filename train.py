@@ -185,13 +185,15 @@ class DistributedWeightedSampler(torch.utils.data.Sampler):
     uniform DistributedSampler, silently disabling density oversampling for the
     diffusion model (trained on 2 GPUs) while the CNN (1 GPU) kept it.
     """
-    def __init__(self, weights, num_replicas: int, rank: int, seed: int = 0):
+    def __init__(self, weights, num_replicas: int, rank: int, seed: int = 0,
+                 epoch_fraction: float = 1.0):
         self.weights      = torch.as_tensor(weights, dtype=torch.double)
         self.num_replicas = num_replicas
         self.rank         = rank
         self.seed         = seed
         self.epoch        = 0
-        self.num_samples  = len(self.weights) // num_replicas
+        total             = max(num_replicas, int(round(len(self.weights) * float(epoch_fraction))))
+        self.num_samples  = total // num_replicas
 
     def set_epoch(self, epoch: int):
         self.epoch = epoch
@@ -216,23 +218,57 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
     stat_path = os.path.join(args.output_dir, "channel_stats.json")
 
     # Build datasets (all ranks do this; index-building is read-only)
-    train_loader, val_loader, stats = make_dataloaders(
-        train_roots       = args.train_roots,
-        channel_list      = channels,
-        T_in              = args.T_in,
-        T_out             = args.T_out,
-        img_size          = tuple(args.img_size),
-        batch_size        = args.batch_size,        # per-GPU batch size
-        num_workers       = args.num_workers,
-        stat_path         = stat_path,
-        max_samples       = args.max_samples,
-        train_val_split   = args.train_val_split,
-        oversample_factor  = args.oversample_factor,
-        augment_flip       = bool(getattr(args, "augment_flip", False)),
-        density_percentile = args.density_percentile,
-        binary_li_ctx      = args.binary_li_ctx,
-        ctx_channels       = args.ctx_channels,
-    )
+    epoch_fraction = float(getattr(args, "epoch_fraction", 1.0) or 1.0)
+    if getattr(args, "use_packed", False):
+        # Preprocessed memory-mapped frames (preprocess_to_memmap.py): identical
+        # values, no per-sample PNG decoding (84 files per sample), which left the
+        # GPU idle ~75% of the time. Same split, stats, weighting and options.
+        from dataset_packed import make_dataloaders_packed
+        packed_dirs = [os.path.join(r, "_packed") for r in args.train_roots]
+        missing = [d for d in packed_dirs if not os.path.isdir(d)]
+        if missing:
+            raise FileNotFoundError(f"use_packed: missing {missing}; run preprocess_to_memmap.py "
+                                    f"--root <region> --channels {' '.join(channels)} for each training region")
+        logging.getLogger(__name__).info(f"Using PACKED data loading: {packed_dirs}")
+        train_loader, val_loader, stats = make_dataloaders_packed(
+            train_packed_dirs  = packed_dirs,
+            channel_list       = channels,
+            T_in               = args.T_in,
+            T_out              = args.T_out,
+            dt_min             = args.dt_min,
+            batch_size         = args.batch_size,
+            num_workers        = args.num_workers,
+            stats_roots        = args.train_roots,
+            stat_path          = stat_path,
+            max_samples        = args.max_samples,
+            train_val_split    = args.train_val_split,
+            oversample_factor  = args.oversample_factor,
+            density_percentile = args.density_percentile,
+            binary_li_ctx      = args.binary_li_ctx,
+            ctx_channels       = args.ctx_channels,
+            augment_flip       = bool(getattr(args, "augment_flip", False)),
+            preload_to_ram     = bool(getattr(args, "preload_to_ram", False)),
+            epoch_fraction     = epoch_fraction,
+        )
+    else:
+        train_loader, val_loader, stats = make_dataloaders(
+            train_roots       = args.train_roots,
+            channel_list      = channels,
+            T_in              = args.T_in,
+            T_out             = args.T_out,
+            img_size          = tuple(args.img_size),
+            batch_size        = args.batch_size,        # per-GPU batch size
+            num_workers       = args.num_workers,
+            stat_path         = stat_path,
+            max_samples       = args.max_samples,
+            train_val_split   = args.train_val_split,
+            oversample_factor  = args.oversample_factor,
+            augment_flip       = bool(getattr(args, "augment_flip", False)),
+            density_percentile = args.density_percentile,
+            binary_li_ctx      = args.binary_li_ctx,
+            ctx_channels       = args.ctx_channels,
+            epoch_fraction     = epoch_fraction,
+        )
 
     if not ddp_active() or world_size == 1:
         return train_loader, val_loader, stats
@@ -249,7 +285,7 @@ def make_distributed_loaders(args, local_rank: int, world_size: int):
     _weights = getattr(train_loader.sampler, "weights", None)
     if _weights is not None:
         train_sampler = DistributedWeightedSampler(_weights, num_replicas=world_size,
-                                                   rank=local_rank)
+                                                   rank=local_rank, epoch_fraction=epoch_fraction)
         _log.getLogger(__name__).info(
             "DDP mode: density oversampling kept via DistributedWeightedSampler.")
     else:

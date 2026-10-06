@@ -124,6 +124,13 @@ def add_arguments(parser: argparse.ArgumentParser):
                              "Gives the model an explicit spatial prior on where "
                              "lightning was occurring. Following Ravuri et al. 2021.")
     # -- LI event threshold (training + evaluation) --
+    parser.add_argument("--use_packed", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=False,
+                        help="Read preprocessed <train_root>/_packed memmaps (preprocess_to_memmap.py) instead of PNGs.")
+    parser.add_argument("--preload_to_ram", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=False,
+                        help="With use_packed: load each region's packed frames into RAM.")
+    parser.add_argument("--epoch_fraction", type=float, default=1.0,
+                        help="Fraction of the weighted training sequences drawn per epoch (shorter epochs; "
+                             "every sequence stays eligible every epoch).")
     parser.add_argument("--augment_flip", type=lambda x: str(x).lower() in ("1", "true", "yes"),
                         default=False, help="East-west flip augmentation of training samples (default off).")
     parser.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0,

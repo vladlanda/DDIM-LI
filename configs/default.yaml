@@ -50,6 +50,12 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
+epoch_fraction:    0.1             # each epoch draws 10% of the weighted training sequences (with
+                                  # replacement); every sequence stays eligible every epoch. Full pass
+                                  # over ~144k stride-1 sequences is otherwise ~9k steps per epoch.
+use_packed:        false           # true after preprocess_to_memmap.py for every training region
+                                  # (PNG decoding left the GPU idle ~75% of the time)
+preload_to_ram:    false           # with use_packed: hold packed frames in RAM (~6 GB per region)
 augment_flip:      false           # east-west flip of training samples. OFF: Central/West African
                                   # convective systems propagate predominantly westward (mid-level
                                   # easterlies), so mirrored samples are unrealistic. Same for ALL models.
@@ -71,12 +77,13 @@ sigma_max:  80.0
 # ----------------------------------------------------------
 # Training
 # ----------------------------------------------------------
-epochs:         999
+epochs:         999   # = TRAINING BUDGET in (short) epochs: the cosine LR schedule spans exactly this many.
+                                  # Set from the measured epoch time before a long run; stopping early leaves the LR un-annealed.
 batch_size:     16
 lr:             2.0e-4
 weight_decay:   0.0               # EMA already regularises (Karras 2022)
 grad_clip:      1.0
-ema_decay:      0.999991          # ~10-epoch half-life at 7400 steps/epoch
+ema_decay:      0.999991          # half-life ~77k optimiser steps (independent of epoch length)
                                   # ema_decay=0.9999 designed for ~100 steps/epoch
                                   # = 0.94-epoch half-life on full dataset (too fast)
 amp:            true
@@ -129,7 +136,7 @@ ctx_channels:    null              # all channels — LI included in context
 # ----------------------------------------------------------
 slow_val:     false
 val_every:    10
-val_samples:  -1
+val_samples:  200   # validation batches per epoch: a FIXED seeded subset (comparable across epochs); -1 = all
 n_members:    1
 cfg_scale:    1.5
 

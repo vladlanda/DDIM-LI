@@ -305,8 +305,11 @@ def compute_li_sample_weights_packed(dataset, oversample_factor=5.0,
         densities[i] = float((arr > 0).mean())
 
     threshold = float(np.percentile(densities, density_percentile))
-    weights = np.where(densities >= threshold, float(oversample_factor), 1.0).astype(np.float64)
-    n_high = int((densities >= threshold).sum())
+    # same rule as dataset.compute_li_sample_weights: a zero percentile with '>='
+    # would oversample every sequence (silent no-op), so use '>' then
+    high = densities > threshold if threshold <= 0.0 else densities >= threshold
+    weights = np.where(high, float(oversample_factor), 1.0).astype(np.float64)
+    n_high = int(high.sum())
     logger.info(f"  [packed] LI density threshold (p{density_percentile:.0f}): "
                f"{threshold:.4f}  high-density: {n_high}, low: {len(dataset)-n_high}")
     return weights
@@ -330,6 +333,7 @@ def make_dataloaders_packed(
     ctx_channels:        Optional[List[str]] = None,
     augment_flip:        bool = False,
     preload_to_ram:      bool = False,
+    epoch_fraction:      float = 1.0,
 ):
     """
     Packed-data equivalent of dataset.make_dataloaders. Same temporal
@@ -405,7 +409,8 @@ def make_dataloaders_packed(
     ])
     train_sampler = WeightedRandomSampler(
         weights=torch.from_numpy(all_weights).double(),
-        num_samples=len(train_combined), replacement=True,
+        # epoch_fraction: each epoch draws this fraction of the (weighted) training sequences, with replacement; every sequence stays eligible every epoch
+        num_samples=max(1, int(round(len(train_combined) * float(epoch_fraction)))), replacement=True,
     )
     # persistent_workers=True: without this, DataLoader tears down and
     # RESPAWNS all worker processes at the start of EVERY epoch (PyTorch's
