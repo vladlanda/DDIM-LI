@@ -75,6 +75,8 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--weight_decay",    type=float, default=1e-4)
     parser.add_argument("--grad_clip",       type=float, default=1.0)
     parser.add_argument("--ema_decay",       type=float, default=0.9999)
+    parser.add_argument("--ema_warmup", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=True,
+                        help="EMA ramp-up: decay min(ema_decay, (1+n)/(10+n)) after n updates (default true).")
     parser.add_argument("--val_use_ema", type=lambda x: str(x).lower() in ("1", "true", "yes"), default=True,
                         help="Validate (checkpoint criterion) with the EMA weights that evaluation loads (default true).")
     parser.add_argument("--amp",             type=_bool, default=True)

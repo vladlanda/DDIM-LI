@@ -144,31 +144,56 @@ def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDe
 # ===================================================================
 
 class EMA:
-    def __init__(self, model: nn.Module, decay: float = 0.9999):
-        self.decay  = decay
-        # Store a plain copy of the unwrapped parameters
-        self.shadow = {
-            k: v.detach().float().cpu().clone()
-            for k, v in self._unwrap(model).state_dict().items()
-        }
+    """Exponential moving average of the weights, kept ON THE MODEL'S DEVICE.
+
+    - Previously every step copied all parameters to the CPU and averaged there:
+      a GPU sync plus ~87 MB transfer per step (21.8M params).
+    - Ramp-up (warmup=True): effective decay min(decay, (1+n)/(10+n)) after n
+      updates, so the EMA averages over roughly the last ~10% of training so far
+      instead of staying dominated by the random initial weights for ~77k steps
+      (it is validated, and selected, every epoch). The final EMA is unaffected
+      once (1+n)/(10+n) exceeds the cap.
+    - state_dict() returns CPU copies of the weights only (evaluation loads
+      ckpt["ema"] directly as model weights); the update count is saved
+      separately (ckpt["ema_updates"]).
+    """
+    def __init__(self, model: nn.Module, decay: float = 0.9999, warmup: bool = True):
+        self.decay       = decay
+        self.warmup      = warmup
+        self.num_updates = 0
+        self.shadow = {k: v.detach().clone().float() if v.dtype.is_floating_point else v.detach().clone()
+                       for k, v in self._unwrap(model).state_dict().items()}
 
     @staticmethod
     def _unwrap(model: nn.Module) -> nn.Module:
         return model.module if isinstance(model, DDP) else model
 
+    def current_decay(self) -> float:
+        if not self.warmup:
+            return self.decay
+        return min(self.decay, (1.0 + self.num_updates) / (10.0 + self.num_updates))
+
     @torch.no_grad()
     def update(self, model: nn.Module):
+        self.num_updates += 1
+        d   = self.current_decay()
         src = self._unwrap(model).state_dict()
-        for k in self.shadow:
-            self.shadow[k].mul_(self.decay).add_(
-                src[k].detach().float().cpu(), alpha=1 - self.decay
-            )
+        for k, s in self.shadow.items():
+            v = src[k].detach()
+            if s.dtype.is_floating_point:
+                s.mul_(d).add_(v.to(s.dtype), alpha=1.0 - d)
+            else:
+                s.copy_(v)
 
     def state_dict(self) -> dict:
-        return self.shadow
+        return {k: v.detach().cpu().clone() for k, v in self.shadow.items()}
 
-    def load_state_dict(self, sd: dict):
-        self.shadow = {k: v.float().cpu() for k, v in sd.items()}
+    def load_state_dict(self, sd: dict, num_updates: int = None):
+        for k, v in sd.items():
+            if k in self.shadow:
+                self.shadow[k].copy_(v.to(self.shadow[k].device, self.shadow[k].dtype))
+        if num_updates is not None:
+            self.num_updates = int(num_updates)
 
 
 # ===================================================================
@@ -381,7 +406,7 @@ def train(args):
     # update is deterministic, so all ranks hold identical shadows. That lets
     # validation run on the EMA weights on all ranks (the weights evaluation
     # loads), instead of the raw weights; only rank 0 saves it.
-    ema = EMA(model, decay=args.ema_decay)
+    ema = EMA(model, decay=args.ema_decay, warmup=bool(getattr(args, "ema_warmup", True)))
 
     schedule = EDMSchedule(
         P_mean     = args.P_mean,
@@ -407,7 +432,7 @@ def train(args):
         raw_model.load_state_dict(ckpt["model"])
         opt.load_state_dict(ckpt["opt"])
         if ema is not None and ckpt.get("ema"):
-            ema.load_state_dict(ckpt["ema"])
+            ema.load_state_dict(ckpt["ema"], num_updates=ckpt.get("ema_updates"))
         start_epoch = ckpt["epoch"] + 1
         best_val    = ckpt.get("best_val", best_val)
 
@@ -621,6 +646,7 @@ def train(args):
                 torch.save(
                     {"model":    raw_model.state_dict(),
                      "ema":      ema.state_dict() if ema else {},
+                     "ema_updates": ema.num_updates if ema else 0,
                      "opt":      opt.state_dict(),
                      "sched":    sched.state_dict(),
                      "epoch":    epoch,
@@ -636,6 +662,7 @@ def train(args):
                 "epoch":    epoch,
                 "model":    raw_model.state_dict(),
                 "ema":      ema.state_dict() if ema else {},
+                     "ema_updates": ema.num_updates if ema else 0,
                 "opt":      opt.state_dict(),
                 "sched":    sched.state_dict(),
                 "best_val": best_val,
