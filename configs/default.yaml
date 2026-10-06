@@ -50,6 +50,7 @@ num_res_blocks:    2
 attn_resolutions:  [64, 32]
 dropout:           0.1
 emb_dim:           256
+seed:              0               # global random seed (offset by rank under DDP); vary only for seed-robustness runs
 epoch_fraction:    0.1             # each epoch draws 10% of the weighted training sequences (with
                                   # replacement); every sequence stays eligible every epoch. Full pass
                                   # over ~144k stride-1 sequences is otherwise ~9k steps per epoch.
