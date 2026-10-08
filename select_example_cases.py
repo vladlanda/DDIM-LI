@@ -116,11 +116,12 @@ def parse_args():
     return args
 
 
-def load_model_and_data(args, device):
+def load_model(args, device):
     """Same checkpoint-loading / model-construction pattern as
     evaluate.py's run_test_evaluation -- kept in sync deliberately, not
     reimplemented independently, so this script can never silently drift
-    from how the real evaluation loads a checkpoint."""
+    from how the real evaluation loads a checkpoint.
+    Returns (model, ckpt_args, stats, channels)."""
     ckpt = torch.load(args.checkpoint, map_location=device)
     if "args" not in ckpt:
         raise RuntimeError(
@@ -155,7 +156,14 @@ def load_model_and_data(args, device):
     model.to(device).eval()
     logger.info(f"Checkpoint loaded: {args.checkpoint}  channels={channels}  "
                f"T_in={T_in} T_out={T_out} dt={dt_min}min")
+    return model, ckpt_args, stats, channels
 
+
+def load_model_and_data(args, device):
+    model, ckpt_args, stats, channels = load_model(args, device)
+    T_in, T_out = ckpt_args["T_in"], ckpt_args["T_out"]
+    binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
+    ctx_channels = ckpt_args.get("ctx_channels", None)
     test_loader = make_test_loader(
         test_roots=args.test_roots, channel_list=channels, stats=stats,
         T_in=T_in, T_out=T_out, img_size=tuple(args.img_size),

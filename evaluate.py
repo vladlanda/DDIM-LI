@@ -109,6 +109,8 @@ def generate_ensemble(
 
             def denoiser_fn(x, sigma, _step=step, _lead_idx=lead_idx):
                 cond   = model(x, sigma, context,                 ch_mask, _lead_idx)
+                if cfg_scale == 1.0:          # guidance off: uncond term cancels
+                    return cond
                 uncond = model(x, sigma, torch.zeros_like(context), ch_mask, _lead_idx)
                 return uncond + cfg_scale * (cond - uncond)
 

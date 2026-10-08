@@ -8,7 +8,7 @@
 # ----------------------------------------------------------
 # Paths
 # ----------------------------------------------------------
-checkpoint:   outputs/nature_256_T36_ir_li_only/best.pt
+checkpoint:   outputs/v2_ir_li/best.pt
 
 test_roots:
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_1
@@ -16,15 +16,15 @@ test_roots:
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_3
   - /home/vladlanda/Workplace/LI-DATASETS/split/test/central_africa_4
 
-output_dir:   outputs/nature_256_T36_ir_li_only/eval_ens_30
+output_dir:   outputs/v2_ir_li/eval_test_ens50
 
 # ----------------------------------------------------------
 # Ensemble sampling
 # ----------------------------------------------------------
-n_members:    30
+n_members:    50
 cfg_scale:    1.5
 num_steps:    20
-S_churn:      60.0
+S_churn:      40.0         # with num_steps 20, any S_churn >= 8.28 saturates (gamma capped at sqrt2-1); set from tune_sampling_on_val.py
 S_noise:      1.003
 
 # ----------------------------------------------------------
@@ -32,7 +32,7 @@ S_noise:      1.003
 # ----------------------------------------------------------
 fss_prob_thresholds:  [0.1, 0.3, 0.5]
 fss_scales:           [1, 2, 4, 8, 16, 32]
-pixel_size_km:        4.0
+pixel_size_km:        3.14
 li_event_threshold:   0.00196078   # 0.5/255 = AFA >= 1 (any lightning). AFA>=5 sensitivity: 0.017647
 
 # ----------------------------------------------------------
