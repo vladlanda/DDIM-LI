@@ -22,9 +22,9 @@ output_dir:   outputs/v2_ir_li/eval_test_ens50
 # Ensemble sampling
 # ----------------------------------------------------------
 n_members:    50
-cfg_scale:    1.5
+cfg_scale:    1.0          # selected on validation (tune_sampling_on_val.py): guidance did not help; 1.0 also halves cost
 num_steps:    20
-S_churn:      40.0         # with num_steps 20, any S_churn >= 8.28 saturates (gamma capped at sqrt2-1); set from tune_sampling_on_val.py
+S_churn:      8.3          # selected on validation; = maximum churn at num_steps 20 (gamma capped at sqrt2-1 for S_churn >= 8.28)
 S_noise:      1.003
 
 # ----------------------------------------------------------

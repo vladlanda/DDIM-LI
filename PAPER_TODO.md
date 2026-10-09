@@ -6,6 +6,9 @@
 > 2. `cfg_scale` (1.5) and `S_churn` (40, at the Karras cap for 20 steps) change
 >    the sampled distribution (guidance > 1 trades spread for sharpness). Choose on
 >    VALIDATION data (e.g. CRPS/reliability), or use cfg_scale 1.0; report them.
+>    [DONE] Validation grid cfg {1.0,1.5,2.0} x churn {0,4,8.3}, 96 val seqs, 10 members:
+>    chosen cfg_scale 1.0, S_churn 8.3 (max) -- best lead-mean AP 0.635, Brier 0.0269,
+>    CRPS 0.00112; freq_bias 1.03, spread/skill 1.09. Guidance >1 gave no gain (2.0 worse).
 > 3. [DECIDED 2026-09-29: OFF by default for all models, config augment_flip; an
 >    ablation can re-enable it] Horizontal (east-west) flip augmentation mirrors the prevailing westward
 >    propagation of Central/West African convective systems. Either disable it or
