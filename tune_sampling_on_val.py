@@ -66,12 +66,92 @@ def val_loader(ckpt_args, stats, channels, roots, n_per_region, batch_size, num_
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
+def _scores(prob, lbl):
+    """AP / Brier / freq. bias / mean prob on observed negatives for one lead."""
+    pr, lb = np.concatenate(prob), np.concatenate(lbl).astype(np.float32)
+    base = lb.mean()
+    return dict(ap=average_precision(pr, lb), brier=float(((np.clip(pr, 0, 1) - lb) ** 2).mean()),
+                freq_bias=float(np.clip(pr, 0, 1).mean() / base) if base > 0 else np.nan,
+                p_neg=float(np.clip(pr, 0, 1)[lb == 0].mean()), base_rate=float(base))
+
+
+def score_baselines(args, batches, stats, channels, li, T_out, device):
+    """CNN (sigmoid probability) and persistence on the SAME val batches as the diffusion grid.
+    Persistence AP ranks by the raw last-frame LI value (as persistence_baseline.py);
+    its Brier/bias use the binary forecast (last frame >= threshold)."""
+    import os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_cnn"))
+    from model_cnn import DeterministicCNN
+
+    ck = torch.load(args.cnn_checkpoint, map_location=device)
+    ca = ck["args"]
+    # The CNN must see identically normalised inputs: same channels, stats and context layout.
+    assert ck["channels"] == channels, (ck["channels"], channels)
+    for ch in channels:
+        for k in ("mean", "std"):
+            assert abs(ck["stats"][ch][k] - stats[ch][k]) < 1e-6, f"stats differ: {ch}.{k}"
+    cnn = DeterministicCNN(
+        C=len(channels), T_in=ca["T_in"], T_out=ca["T_out"], dt_min=ca["dt_min"],
+        ctx_channels=ca.get("ctx_channels"), binary_li_ctx=ca.get("binary_li_ctx", True),
+        base_channels=ca["base_channels"], channel_mults=tuple(ca["channel_mults"]),
+        num_res_blocks=ca["num_res_blocks"], attn_resolutions=tuple(ca["attn_resolutions"]),
+        dropout=0.0, emb_dim=ca["emb_dim"], img_size=ca.get("img_size", [256, 256])[0],
+    ).to(device)
+    cnn.load_state_dict(ck["model"]); cnn.eval()
+
+    thr = args.li_event_threshold
+    out = {m: ([[] for _ in range(T_out)], [[] for _ in range(T_out)])
+           for m in ("cnn", "persistence_raw", "persistence_bin")}
+    with torch.no_grad():
+        for batch in tqdm(batches, desc="CNN + persistence", unit="batch"):
+            ctx = batch["context"].to(device)
+            last = batch["last_ctx"].numpy()
+            tgt = _li_to_physical(batch["target"].numpy()[:, :, li] + last[:, None, li], stats)
+            last_phys = _li_to_physical(last[:, li], stats)
+            for t in range(T_out):
+                lead = torch.full((ctx.shape[0],), t, device=device, dtype=torch.long)
+                p_cnn = torch.sigmoid(cnn(ctx, lead))[:, 0].cpu().numpy()
+                y = (tgt[:, t] >= thr).ravel()
+                for m, pr in (("cnn", p_cnn), ("persistence_raw", last_phys),
+                              ("persistence_bin", (last_phys >= thr).astype(np.float32))):
+                    out[m][0][t].append(pr.ravel()); out[m][1][t].append(y)
+
+    path = args.output.replace(".csv", "") + "_baselines.csv"
+    rows = []
+    for m, (prob, lbl) in out.items():
+        for t in range(T_out):
+            rows.append(dict(model=m, lead_min=10 * (t + 1), **_scores(prob[t], lbl[t])))
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+
+    diff = {}
+    if os.path.exists(args.output):
+        for r in csv.DictReader(open(args.output)):
+            if (float(r["cfg_scale"]), float(r["S_churn"])) == tuple(args.compare):
+                diff[int(r["lead_min"])] = r
+    get = lambda m, lead, k: next(float(r[k]) for r in rows if r["model"] == m and r["lead_min"] == lead)
+    print(f"\nSame {sum(len(b['context']) for b in batches)} val sequences, event = LI >= {thr:.6f}")
+    print(f"{'lead':>5} | {'AP diff':>8} {'AP cnn':>7} {'AP pers':>7} {'diff-cnn':>8} | "
+          f"{'Br diff':>8} {'Br cnn':>8} | {'fb diff':>7} {'fb cnn':>6}")
+    for t in range(T_out):
+        lead = 10 * (t + 1)
+        d = diff.get(lead)
+        ad = float(d["ap"]) if d else np.nan
+        print(f"{lead:4d}m | {ad:8.4f} {get('cnn', lead, 'ap'):7.4f} {get('persistence_raw', lead, 'ap'):7.4f} "
+              f"{ad - get('cnn', lead, 'ap'):+8.4f} | {float(d['brier']) if d else np.nan:8.5f} "
+              f"{get('cnn', lead, 'brier'):8.5f} | {float(d['freq_bias']) if d else np.nan:7.2f} "
+              f"{get('cnn', lead, 'freq_bias'):6.2f}")
+    print(f"diffusion = cfg {args.compare[0]}, churn {args.compare[1]} from {args.output}; "
+          f"baselines -> {path}")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--train_roots", nargs="+", default=None)
     p.add_argument("--output", default="tune_sampling_val.csv")
-    p.add_argument("--cfg_scales", type=float, nargs="+", default=[1.0, 1.5, 2.0])
+    p.add_argument("--cfg_scales", type=float, nargs="*", default=[1.0, 1.5, 2.0],
+                   help="pass with no values to skip the diffusion grid (baselines only)")
     p.add_argument("--S_churns", type=float, nargs="+", default=[0.0, 4.0, 8.3])
     p.add_argument("--n_members", type=int, default=10)
     p.add_argument("--n_per_region", type=int, default=24)
@@ -82,6 +162,10 @@ def main():
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--cnn_checkpoint", default=None,
+                   help="also score the CNN baseline + persistence on the same val sequences")
+    p.add_argument("--compare", type=float, nargs=2, default=[1.0, 8.3], metavar=("CFG", "CHURN"),
+                   help="diffusion setting shown next to the baselines")
     args = p.parse_args()
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -93,12 +177,17 @@ def main():
     batches = list(tqdm(loader, desc="Loading val subset", unit="batch"))  # load once, reuse per setting
     thr = args.li_event_threshold
 
+    if args.cnn_checkpoint:
+        score_baselines(args, batches, stats, channels, li, T_out, device)
+    grid = list(itertools.product(args.cfg_scales, args.S_churns))
+    if not grid:
+        return
+
     fields = ["cfg_scale", "S_churn", "lead_min", "ap", "brier", "freq_bias", "p_neg", "crps", "ss",
               "base_rate", "minutes"]
     with open(args.output, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
-        grid = list(itertools.product(args.cfg_scales, args.S_churns))
         bar = tqdm(total=len(grid) * len(batches), desc="Tuning (settings x batches)",
                    unit="batch", dynamic_ncols=True)
         for cfg, churn in grid:
