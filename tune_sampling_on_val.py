@@ -35,6 +35,7 @@ import time
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from bootstrap_pr_auc_ci import average_precision
 from dataset import MultiRegionDataset
@@ -89,7 +90,7 @@ def main():
     T_out = ckpt_args["T_out"]
     loader = val_loader(ckpt_args, stats, channels, args.train_roots or ckpt_args["train_roots"],
                         args.n_per_region, args.batch_size, args.num_workers)
-    batches = list(loader)                       # small subset; load once, reuse per setting
+    batches = list(tqdm(loader, desc="Loading val subset", unit="batch"))  # load once, reuse per setting
     thr = args.li_event_threshold
 
     fields = ["cfg_scale", "S_churn", "lead_min", "ap", "brier", "freq_bias", "p_neg", "crps", "ss",
@@ -97,7 +98,11 @@ def main():
     with open(args.output, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
-        for cfg, churn in itertools.product(args.cfg_scales, args.S_churns):
+        grid = list(itertools.product(args.cfg_scales, args.S_churns))
+        bar = tqdm(total=len(grid) * len(batches), desc="Tuning (settings x batches)",
+                   unit="batch", dynamic_ncols=True)
+        for cfg, churn in grid:
+            bar.set_postfix(cfg=cfg, churn=churn)
             torch.manual_seed(args.seed)         # common random numbers across settings
             t0 = time.time()
             prob = [[] for _ in range(T_out)]; lbl = [[] for _ in range(T_out)]
@@ -124,6 +129,7 @@ def main():
                         var_sum[t] += np.var(e, axis=0, ddof=1).sum() * (M + 1) / M
                         mse_sum[t] += ((e.mean(0) - y) ** 2).sum()
                         n_px[t] += y.size
+                bar.update(1)
             minutes = (time.time() - t0) / 60
             for t in range(T_out):
                 pr, lb = np.concatenate(prob[t]), np.concatenate(lbl[t]).astype(np.float32)
@@ -135,7 +141,8 @@ def main():
                            ss=float(np.sqrt(var_sum[t] / n_px[t]) / np.sqrt(mse_sum[t] / n_px[t])),
                            base_rate=float(base), minutes=round(minutes, 1))
                 w.writerow(row); f.flush()
-            log.info(f"cfg={cfg} churn={churn}: {minutes:.1f} min")
+            bar.write(f"cfg={cfg} churn={churn}: {minutes:.1f} min")
+        bar.close()
 
     # Summary: lead-averaged scores per setting
     rows = list(csv.DictReader(open(args.output)))
