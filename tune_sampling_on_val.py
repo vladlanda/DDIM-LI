@@ -66,6 +66,40 @@ def val_loader(ckpt_args, stats, channels, roots, n_per_region, batch_size, num_
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
+def _nmax(a, hw):
+    """Neighbourhood maximum over a (2hw+1)^2 square on the last two axes."""
+    from scipy.ndimage import maximum_filter
+    k = 2 * hw + 1
+    return maximum_filter(a, size=(1,) * (a.ndim - 2) + (k, k), mode="constant", cval=0)
+
+
+def _p_indep(p, hw):
+    """P(any event in the square) if pixels were INDEPENDENT with probabilities p."""
+    from scipy.ndimage import uniform_filter
+    k = 2 * hw + 1
+    logq = np.log1p(-np.clip(p, 0, 1 - 1e-6))
+    size = (1,) * (p.ndim - 2) + (k, k)          # never filter across the batch axis
+    return 1.0 - np.exp(uniform_filter(logq, size=size, mode="constant", cval=0.0) * k * k)
+
+
+AREA_STRIDE = 4   # ponytail: neighbourhood fields are smooth; keep every 4th pixel per axis (16x less memory)
+
+
+def _area_rows(model, area, T_out):
+    rows = []
+    for hw, per_lead in area.items():
+        for t in range(T_out):
+            prob, lbl = per_lead[t]
+            rows.append(dict(model=model, radius_km=round(hw * 3.14, 1), lead_min=10 * (t + 1),
+                             **_scores([prob], [lbl])))
+    return rows
+
+
+def _write(path, rows):
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+
+
 def _scores(prob, lbl):
     """AP / Brier / freq. bias / mean prob on observed negatives for one lead."""
     pr, lb = np.concatenate(prob), np.concatenate(lbl).astype(np.float32)
@@ -102,6 +136,9 @@ def score_baselines(args, batches, stats, channels, li, T_out, device):
     thr = args.li_event_threshold
     out = {m: ([[] for _ in range(T_out)], [[] for _ in range(T_out)])
            for m in ("cnn", "persistence_raw", "persistence_bin")}
+    area_models = ("cnn_nmax", "cnn_indep", "persistence_bin")
+    area = {m: {hw: [([], []) for _ in range(T_out)] for hw in args.area_hw} for m in area_models}
+    S = AREA_STRIDE
     with torch.no_grad():
         for batch in tqdm(batches, desc="CNN + persistence", unit="batch"):
             ctx = batch["context"].to(device)
@@ -115,6 +152,11 @@ def score_baselines(args, batches, stats, channels, li, T_out, device):
                 for m, pr in (("cnn", p_cnn), ("persistence_raw", last_phys),
                               ("persistence_bin", (last_phys >= thr).astype(np.float32))):
                     out[m][0][t].append(pr.ravel()); out[m][1][t].append(y)
+                for hw in args.area_hw:
+                    lab = _nmax((tgt[:, t] >= thr).astype(np.uint8), hw)[:, ::S, ::S].ravel()
+                    for m, pr in (("cnn_nmax", _nmax(p_cnn, hw)), ("cnn_indep", _p_indep(p_cnn, hw)),
+                                  ("persistence_bin", _nmax((last_phys >= thr).astype(np.float32), hw))):
+                        area[m][hw][t][0].append(pr[:, ::S, ::S].ravel()); area[m][hw][t][1].append(lab)
 
     path = args.output.replace(".csv", "") + "_baselines.csv"
     rows = []
@@ -144,6 +186,32 @@ def score_baselines(args, batches, stats, channels, li, T_out, device):
     print(f"diffusion = cfg {args.compare[0]}, churn {args.compare[1]} from {args.output}; "
           f"baselines -> {path}")
 
+    if not args.area_hw:
+        return
+    stem = args.output.replace(".csv", "")
+    arows = [r for m in area_models for r in _area_rows(m, {hw: [(np.concatenate(a), np.concatenate(b))
+             for a, b in area[m][hw]] for hw in args.area_hw}, T_out)]
+    _write(stem + "_baselines_area.csv", arows)
+    dfile = stem + "_area.csv"
+    drows = [r for r in csv.DictReader(open(dfile))] if os.path.exists(dfile) else []
+    key = f"diffusion_cfg{args.compare[0]}_churn{args.compare[1]}"
+    print("\nAREA probability: event = any lightning in a square of half-width r around the pixel")
+    print(f"{'r km':>5} {'lead':>5} | {'AP diff':>8} {'AP cnn_nmax':>11} {'AP cnn_indep':>12} {'AP pers':>7} | "
+          f"{'Br diff':>8} {'Br nmax':>8} {'Br indep':>8} | {'base':>5}")
+    for hw in args.area_hw:
+        rk = round(hw * 3.14, 1)
+        for t in range(T_out):
+            lead = 10 * (t + 1)
+            g = lambda m, k: next(float(r[k]) for r in arows
+                                  if r["model"] == m and r["radius_km"] == rk and r["lead_min"] == lead)
+            d = next((r for r in drows if r["model"] == key and float(r["radius_km"]) == rk
+                      and int(r["lead_min"]) == lead), None)
+            print(f"{rk:5.1f} {lead:4d}m | {float(d['ap']) if d else np.nan:8.4f} {g('cnn_nmax', 'ap'):11.4f} "
+                  f"{g('cnn_indep', 'ap'):12.4f} {g('persistence_bin', 'ap'):7.4f} | "
+                  f"{float(d['brier']) if d else np.nan:8.5f} {g('cnn_nmax', 'brier'):8.5f} "
+                  f"{g('cnn_indep', 'brier'):8.5f} | {g('cnn_nmax', 'base_rate'):5.3f}")
+    print(f"area rows -> {stem}_baselines_area.csv (diffusion: {dfile})")
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -164,6 +232,9 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cnn_checkpoint", default=None,
                    help="also score the CNN baseline + persistence on the same val sequences")
+    p.add_argument("--area_hw", type=int, nargs="*", default=[2, 3, 6],
+                   help="neighbourhood half-widths in pixels (3.14 km) for area-probability scores; "
+                        "empty = off")
     p.add_argument("--compare", type=float, nargs=2, default=[1.0, 8.3], metavar=("CFG", "CHURN"),
                    help="diffusion setting shown next to the baselines")
     args = p.parse_args()
@@ -188,6 +259,7 @@ def main():
     with open(args.output, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
+        area_all = []
         bar = tqdm(total=len(grid) * len(batches), desc="Tuning (settings x batches)",
                    unit="batch", dynamic_ncols=True)
         for cfg, churn in grid:
@@ -197,6 +269,7 @@ def main():
             prob = [[] for _ in range(T_out)]; lbl = [[] for _ in range(T_out)]
             crps = [[] for _ in range(T_out)]
             var_sum = np.zeros(T_out); mse_sum = np.zeros(T_out); n_px = np.zeros(T_out)
+            area = {hw: [([], []) for _ in range(T_out)] for hw in args.area_hw}
             M = args.n_members
             for batch in batches:
                 with torch.no_grad():
@@ -218,6 +291,10 @@ def main():
                         var_sum[t] += np.var(e, axis=0, ddof=1).sum() * (M + 1) / M
                         mse_sum[t] += ((e.mean(0) - y) ** 2).sum()
                         n_px[t] += y.size
+                        for hw in args.area_hw:   # members' own spatial structure -> area probability
+                            S = AREA_STRIDE
+                            area[hw][t][0].append(_nmax((e >= thr).astype(np.uint8), hw).mean(0)[::S, ::S].ravel())
+                            area[hw][t][1].append(_nmax((y >= thr).astype(np.uint8)[None], hw)[0, ::S, ::S].ravel())
                 bar.update(1)
             minutes = (time.time() - t0) / 60
             for t in range(T_out):
@@ -230,6 +307,10 @@ def main():
                            ss=float(np.sqrt(var_sum[t] / n_px[t]) / np.sqrt(mse_sum[t] / n_px[t])),
                            base_rate=float(base), minutes=round(minutes, 1))
                 w.writerow(row); f.flush()
+            if args.area_hw:
+                area_all.extend(_area_rows(f"diffusion_cfg{cfg}_churn{churn}", {hw: [
+                    (np.concatenate(a), np.concatenate(b)) for a, b in area[hw]] for hw in args.area_hw}, T_out))
+                _write(args.output.replace(".csv", "") + "_area.csv", area_all)
             bar.write(f"cfg={cfg} churn={churn}: {minutes:.1f} min")
         bar.close()
 
