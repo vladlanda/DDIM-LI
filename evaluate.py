@@ -68,6 +68,7 @@ def generate_ensemble(
     sigma_min:  float = 0.002,
     sigma_max:  float = 80.0,
     churn_lead_scale: float = 0.0,
+    progress = None,     # optional callable, called once per sampled (member, lead); hides inner bars
 ) -> torch.Tensor:
     """
     Returns ensemble of shape (B, M, T_out, C, H, W).
@@ -94,6 +95,7 @@ def generate_ensemble(
         unit         = "member",
         dynamic_ncols = True,
         leave        = False,
+        disable      = progress is not None,
     )
     for _ in member_bar:
         all_steps = []
@@ -103,6 +105,7 @@ def generate_ensemble(
             unit         = "step",
             dynamic_ncols = True,
             leave        = False,
+            disable      = progress is not None,
         )
         for step in step_bar:
             lead_idx = torch.full((B,), step, device=device, dtype=torch.long)
@@ -128,6 +131,8 @@ def generate_ensemble(
                 S_noise   = S_noise,
             )
             all_steps.append(pred)
+            if progress is not None:
+                progress()
 
         members.append(torch.stack(all_steps, dim=1))  # (B, T_out, C, H, W)
 

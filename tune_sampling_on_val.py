@@ -260,8 +260,10 @@ def main():
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         area_all = []
-        bar = tqdm(total=len(grid) * len(batches), desc="Tuning (settings x batches)",
-                   unit="batch", dynamic_ncols=True)
+        n_seq = sum(len(b["context"]) for b in batches)
+        bar = tqdm(total=len(grid) * len(batches) * args.n_members * T_out,
+                   desc=f"Sampling ({len(grid)} settings x {n_seq} seqs x {args.n_members} members x {T_out} leads)",
+                   unit="draw", dynamic_ncols=True)
         for cfg, churn in grid:
             bar.set_postfix(cfg=cfg, churn=churn)
             torch.manual_seed(args.seed)         # common random numbers across settings
@@ -278,7 +280,8 @@ def main():
                         device, n_members=M, num_steps=args.num_steps, cfg_scale=cfg,
                         S_churn=churn, S_noise=args.S_noise,
                         sigma_min=float(ckpt_args.get("sigma_min", 0.002)),
-                        sigma_max=float(ckpt_args.get("sigma_max", 80.0)))
+                        sigma_max=float(ckpt_args.get("sigma_max", 80.0)),
+                        progress=lambda: bar.update(1))
                 last = batch["last_ctx"].numpy()
                 ens = _li_to_physical(ens.cpu().numpy()[:, :, :, li] + last[:, None, None, li], stats)
                 tgt = _li_to_physical(batch["target"].numpy()[:, :, li] + last[:, None, li], stats)
@@ -295,7 +298,6 @@ def main():
                             S = AREA_STRIDE
                             area[hw][t][0].append(_nmax((e >= thr).astype(np.uint8), hw).mean(0)[::S, ::S].ravel())
                             area[hw][t][1].append(_nmax((y >= thr).astype(np.uint8)[None], hw)[0, ::S, ::S].ravel())
-                bar.update(1)
             minutes = (time.time() - t0) / 60
             for t in range(T_out):
                 pr, lb = np.concatenate(prob[t]), np.concatenate(lbl[t]).astype(np.float32)
