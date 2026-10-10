@@ -58,6 +58,12 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--num_res_blocks",    type=int,   default=2)
     parser.add_argument("--attn_resolutions",  nargs="+",  type=int, default=[16, 8])
     parser.add_argument("--dropout",           type=float, default=0.1)
+    parser.add_argument("--cnn_cond_checkpoint", type=str, default=None,
+                        help="Frozen baseline_cnn checkpoint whose per-lead event probability is "
+                             "fed to the diffusion UNet as one extra input channel.")
+    parser.add_argument("--init_from", type=str, default=None,
+                        help="Initialise weights from this diffusion checkpoint (its EMA) on a "
+                             "fresh start; new input channels are zero-initialised.")
     parser.add_argument("--emb_dim",           type=int,   default=512)
     parser.add_argument("--sigma_data",        type=float, default=0.5)
 

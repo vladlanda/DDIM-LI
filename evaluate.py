@@ -1568,7 +1568,7 @@ def run_test_evaluation(args):
     logger.info(f"Device: {device}")
 
     # ---- Load checkpoint ----
-    from model import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule, compute_in_ch
+    from model import UNet, EDMPrecond, MultiStepDenoiser, EDMSchedule, compute_in_ch, load_cnn_conditioner
 
     ckpt      = torch.load(args.checkpoint, map_location=device)
     # Older checkpoints may not have "args" saved.
@@ -1597,7 +1597,8 @@ def run_test_evaluation(args):
     # Reconstruct input channels exactly as in train.py build_model
     binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
     ctx_channels  = ckpt_args.get("ctx_channels", None)
-    in_ch = compute_in_ch(C, T_in, ctx_channels, binary_li_ctx)
+    cnn_path = ckpt_args.get("cnn_cond_checkpoint")
+    in_ch = compute_in_ch(C, T_in, ctx_channels, binary_li_ctx, cnn_cond=bool(cnn_path))
 
     unet = UNet(
         in_channels      = in_ch,
@@ -1611,7 +1612,9 @@ def run_test_evaluation(args):
         img_size         = ckpt_args.get("img_size", [64, 64])[0],
     )
     precond  = EDMPrecond(unet, sigma_data=ckpt_args.get("sigma_data", 0.5))
-    model    = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)
+    model    = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min,
+        cnn=load_cnn_conditioner(cnn_path, device, channels, stats, T_in, binary_li_ctx, ctx_channels)
+            if cnn_path else None)
     # Prefer EMA weights for evaluation
     state    = ckpt.get("ema") or ckpt["model"]
     model.load_state_dict(state)

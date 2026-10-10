@@ -55,6 +55,7 @@ from dataset import make_dataloaders
 from model import (
     UNet, EDMPrecond, MultiStepDenoiser,
     EDMSchedule, training_loss, compute_in_ch,
+    load_cnn_conditioner, load_init_weights,
 )
 from evaluate import evaluate_epoch, fast_val_metrics
 
@@ -122,8 +123,10 @@ def ddp_active() -> bool:
 # Model factory
 # ===================================================================
 
-def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDenoiser:
-    in_ch = compute_in_ch(C, T_in, args.ctx_channels, args.binary_li_ctx)
+def build_model(C: int, T_in: int, T_out: int, dt_min: int, args, stats=None,
+                device="cpu") -> MultiStepDenoiser:
+    cnn_path = getattr(args, "cnn_cond_checkpoint", None)
+    in_ch = compute_in_ch(C, T_in, args.ctx_channels, args.binary_li_ctx, cnn_cond=bool(cnn_path))
     unet   = UNet(
         in_channels      = in_ch,
         out_channels     = C,
@@ -136,7 +139,12 @@ def build_model(C: int, T_in: int, T_out: int, dt_min: int, args) -> MultiStepDe
         img_size         = tuple(args.img_size)[0],
     )
     precond = EDMPrecond(unet, sigma_data=args.sigma_data)
-    return MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)
+    cnn = None
+    if cnn_path:
+        assert stats is not None, "CNN conditioning needs the training stats to check the CNN inputs"
+        cnn = load_cnn_conditioner(cnn_path, device, args.channels, stats, T_in,
+                                   args.binary_li_ctx, args.ctx_channels)
+    return MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min, cnn=cnn)
 
 
 # ===================================================================
@@ -380,7 +388,17 @@ def train(args):
     train_loader, val_loader, stats = make_distributed_loaders(args, local_rank, world_size)
 
     # ----- Model -----
-    model = build_model(C, args.T_in, args.T_out, args.dt_min, args).to(device)
+    model = build_model(C, args.T_in, args.T_out, args.dt_min, args, stats, device).to(device)
+    if getattr(args, "cnn_cond_checkpoint", None) and args.cfg_drop_prob > 0:
+        raise ValueError("cnn_cond_checkpoint with cfg_drop_prob > 0: the dropped (zeroed) context "
+                         "would still feed the CNN; set cfg_drop_prob 0 (guidance is unused, cfg_scale 1).")
+    # Fine-tune from an earlier run: start from its EMA weights. Only on a fresh start;
+    # a --resume of THIS run loads latest.pt below and overrides it.
+    if getattr(args, "init_from", None) and not (args.resume and os.path.exists(
+            os.path.join(args.output_dir, "latest.pt"))):
+        load_init_weights(model, args.init_from)
+        if main:
+            logger.info(f"Initialised from {args.init_from} (EMA weights; new input channels zero)")
 
     if main:
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6

@@ -38,7 +38,7 @@ def main():
     channels = args.channels
     C = len(channels)
     li_idx = channels.index("li")
-    model = build_model(C, args.T_in, args.T_out, args.dt_min, args).to(device).eval()
+    model = build_model(C, args.T_in, args.T_out, args.dt_min, args, stats, device).to(device).eval()
     if ckpt_path:
         ck = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ck.get("ema") or ck["model"])

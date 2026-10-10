@@ -56,7 +56,7 @@ import torch
 from config import load_yaml
 from dataset import denormalize, make_test_loader
 from evaluate import _li_to_physical, generate_ensemble, plot_forecast
-from model import EDMPrecond, MultiStepDenoiser, UNet, compute_in_ch
+from model import EDMPrecond, MultiStepDenoiser, UNet, compute_in_ch, load_cnn_conditioner
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -138,7 +138,8 @@ def load_model(args, device):
     C = len(channels)
     binary_li_ctx = ckpt_args.get("binary_li_ctx", False)
     ctx_channels = ckpt_args.get("ctx_channels", None)
-    in_ch = compute_in_ch(C, T_in, ctx_channels, binary_li_ctx)
+    cnn_path = ckpt_args.get("cnn_cond_checkpoint")
+    in_ch = compute_in_ch(C, T_in, ctx_channels, binary_li_ctx, cnn_cond=bool(cnn_path))
 
     unet = UNet(
         in_channels=in_ch, out_channels=C,
@@ -150,7 +151,9 @@ def load_model(args, device):
         img_size=ckpt_args.get("img_size", [64, 64])[0],
     )
     precond = EDMPrecond(unet, sigma_data=ckpt_args.get("sigma_data", 0.5))
-    model = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min)
+    model = MultiStepDenoiser(precond, T_out=T_out, dt_min=dt_min,
+        cnn=load_cnn_conditioner(cnn_path, device, channels, stats, T_in, binary_li_ctx, ctx_channels)
+            if cnn_path else None)
     state = ckpt.get("ema") or ckpt["model"]
     model.load_state_dict(state)
     model.to(device).eval()

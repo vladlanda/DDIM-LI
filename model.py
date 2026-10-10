@@ -305,6 +305,7 @@ class EDMPrecond(nn.Module):
         context:   torch.Tensor,
         ch_mask:   torch.Tensor,
         lead_time: torch.Tensor,
+        extra:     Optional[torch.Tensor] = None,   # (B, k, H, W) extra conditioning, appended LAST
     ) -> torch.Tensor:
         sd = self.sigma_data
         c_skip  = sd**2 / (sigma**2 + sd**2)
@@ -317,7 +318,8 @@ class EDMPrecond(nn.Module):
         c_in   = c_in  [:, None, None, None]
 
         mask_spatial = ch_mask[:, :, None, None].expand_as(x_noisy)
-        net_input    = torch.cat([c_in * x_noisy, context, mask_spatial], dim=1)
+        parts        = [c_in * x_noisy, context, mask_spatial] + ([extra] if extra is not None else [])
+        net_input    = torch.cat(parts, dim=1)
 
         raw = self.unet(net_input, c_noise, lead_time, ch_mask)
         return c_skip * x_noisy + c_out * raw
@@ -332,11 +334,26 @@ class MultiStepDenoiser(nn.Module):
     Wraps EDMPrecond for (B, T_out, C, H, W) targets.
     Each lead step is processed independently with shared weights.
     """
-    def __init__(self, precond: EDMPrecond, T_out: int, dt_min: int = 10):
+    def __init__(self, precond: EDMPrecond, T_out: int, dt_min: int = 10,
+                 cnn: Optional[nn.Module] = None):
         super().__init__()
         self.precond = precond
         self.T_out   = T_out
         self.dt_min  = dt_min
+        # Optional FROZEN deterministic CNN (baseline_cnn): its event probability for
+        # the requested lead is fed to the UNet as one extra input channel, so the
+        # diffusion model refines a strong deterministic nowcast (cf. CorrDiff,
+        # Mardani et al. 2025) instead of learning lightning probability from scratch.
+        self.cnn = cnn
+        if cnn is not None:
+            cnn.requires_grad_(False)
+            cnn.eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if self.cnn is not None:
+            self.cnn.eval()      # frozen conditioner always in eval mode
+        return self
 
     def forward(
         self,
@@ -349,7 +366,11 @@ class MultiStepDenoiser(nn.Module):
         B, T_in, C_ctx, H, W = context.shape
         ctx_flat  = context.reshape(B, T_in * C_ctx, H, W)
         lead_time = (lead_idx.float() + 1) * self.dt_min
-        return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time)
+        extra = None
+        if self.cnn is not None:
+            with torch.no_grad():
+                extra = torch.sigmoid(self.cnn(context, lead_idx).float()).to(x_noisy.dtype)
+        return self.precond(x_noisy, sigma, ctx_flat, ch_mask, lead_time, extra)
 
     @torch.no_grad()
     def sample_all_steps(
@@ -757,7 +778,8 @@ def training_loss(
 # evaluate.py, and infer.py. All three were consistent, but duplication
 # is exactly how such formulas silently drift after a future edit.
 # =====================================================================
-def compute_in_ch(C: int, T_in: int, ctx_channels, binary_li_ctx: bool) -> int:
+def compute_in_ch(C: int, T_in: int, ctx_channels, binary_li_ctx: bool,
+                  cnn_cond: bool = False) -> int:
     """
     Total UNet input channels: noisy target (C) + flattened context
     (T_in * C_ctx) + channel-presence mask (C).
@@ -770,4 +792,53 @@ def compute_in_ch(C: int, T_in: int, ctx_channels, binary_li_ctx: bool) -> int:
     C_ctx_sel = len(ctx_channels) if ctx_channels else C
     li_in_ctx = (ctx_channels is None) or ("li" in ctx_channels)
     C_ctx     = C_ctx_sel + 1 if (binary_li_ctx and li_in_ctx) else C_ctx_sel
-    return C + T_in * C_ctx + C
+    return C + T_in * C_ctx + C + (1 if cnn_cond else 0)
+
+
+def load_cnn_conditioner(path: str, device, channels, stats, T_in: int,
+                         binary_li_ctx: bool, ctx_channels) -> nn.Module:
+    """Load a trained baseline_cnn checkpoint as a frozen conditioner and check that it
+    sees exactly the same inputs as the diffusion model (channels, normalisation stats,
+    context length/layout) -- otherwise its probabilities would be silently wrong."""
+    import os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline_cnn"))
+    from model_cnn import DeterministicCNN
+
+    ck = torch.load(path, map_location=device, weights_only=False)
+    a = ck["args"]
+    assert list(ck["channels"]) == list(channels), (ck["channels"], channels)
+    for ch in channels:
+        for k in ("mean", "std"):
+            assert abs(ck["stats"][ch][k] - stats[ch][k]) < 1e-6, f"CNN stats differ: {ch}.{k}"
+    for name, got, want in (("T_in", a["T_in"], T_in),
+                            ("binary_li_ctx", a.get("binary_li_ctx", True), binary_li_ctx),
+                            ("ctx_channels", a.get("ctx_channels"), ctx_channels)):
+        assert got == want, f"CNN {name}={got} but diffusion {name}={want}"
+    cnn = DeterministicCNN(
+        C=len(ck["channels"]), T_in=a["T_in"], T_out=a["T_out"], dt_min=a["dt_min"],
+        ctx_channels=a.get("ctx_channels"), binary_li_ctx=a.get("binary_li_ctx", True),
+        base_channels=a["base_channels"], channel_mults=tuple(a["channel_mults"]),
+        num_res_blocks=a["num_res_blocks"], attn_resolutions=tuple(a["attn_resolutions"]),
+        dropout=0.0, emb_dim=a["emb_dim"], img_size=a.get("img_size", [256, 256])[0],
+    ).to(device)
+    cnn.load_state_dict(ck["model"])
+    return cnn
+
+
+def load_init_weights(model: nn.Module, path: str) -> None:
+    """Initialise from an earlier diffusion checkpoint (its EMA weights). If the new
+    model has extra input channels (CNN conditioning, appended last), the old input-conv
+    weights are copied into the first columns and the new columns start at ZERO, so the
+    initialised model reproduces the old one exactly. Weights of the frozen CNN are not
+    in the old checkpoint and keep the values load_cnn_conditioner gave them."""
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    old = ck.get("ema") or ck["model"]
+    new = model.state_dict()
+    k = "precond.unet.input_conv.weight"
+    if old[k].shape != new[k].shape:
+        w = torch.zeros_like(new[k])
+        w[:, :old[k].shape[1]] = old[k]
+        old = {**old, k: w}
+    missing, unexpected = model.load_state_dict(old, strict=False)
+    assert not unexpected, unexpected
+    assert all(m.startswith("cnn.") for m in missing), missing
