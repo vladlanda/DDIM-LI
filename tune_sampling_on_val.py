@@ -40,6 +40,7 @@ from tqdm import tqdm
 from bootstrap_pr_auc_ci import average_precision
 from dataset import MultiRegionDataset
 from evaluate import _li_to_physical, crps_energy, generate_ensemble
+from evaluate import area_nmax as _nmax, area_p_indep as _p_indep
 from select_example_cases import load_model
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -66,23 +67,7 @@ def val_loader(ckpt_args, stats, channels, roots, n_per_region, batch_size, num_
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
 
-def _nmax(a, hw):
-    """Neighbourhood maximum over a (2hw+1)^2 square on the last two axes."""
-    from scipy.ndimage import maximum_filter
-    k = 2 * hw + 1
-    return maximum_filter(a, size=(1,) * (a.ndim - 2) + (k, k), mode="constant", cval=0)
-
-
-def _p_indep(p, hw):
-    """P(any event in the square) if pixels were INDEPENDENT with probabilities p."""
-    from scipy.ndimage import uniform_filter
-    k = 2 * hw + 1
-    logq = np.log1p(-np.clip(p, 0, 1 - 1e-6))
-    size = (1,) * (p.ndim - 2) + (k, k)          # never filter across the batch axis
-    return 1.0 - np.exp(uniform_filter(logq, size=size, mode="constant", cval=0.0) * k * k)
-
-
-AREA_STRIDE = 4   # ponytail: neighbourhood fields are smooth; keep every 4th pixel per axis (16x less memory)
+from evaluate import AREA_STRIDE
 
 
 def _area_rows(model, area, T_out):

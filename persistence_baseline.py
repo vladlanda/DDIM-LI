@@ -49,7 +49,8 @@ except ImportError:
 sys.path.insert(0, os.path.dirname(__file__))
 from evaluate import (
     fss_parts, fss_aggregate, pooled_categorical_scores,
-    _li_to_physical, crps_energy, lightning_skill_curve, fss, spread_skill
+    _li_to_physical, crps_energy, lightning_skill_curve, fss, spread_skill,
+    area_nmax, area_collect, save_area_outputs,
 )
 from dataset import make_test_loader, denormalize
 
@@ -132,6 +133,7 @@ def run_persistence_evaluation(args):
                                                  # sequence-level (not pixel-
                                                  # level) bootstrap CIs later.
     seq_counter = 0   # increments once per test SEQUENCE (not per pixel/lead)
+    area_store = {}
 
     # ── Evaluation loop
     batch_bar = tqdm(test_loader, desc="Persistence eval", unit="batch",
@@ -212,6 +214,10 @@ def run_persistence_evaluation(args):
                     pr_labels[t].append(flat_lbl)
                     pr_seqids[t].append(np.full(flat_prob.shape, seq_counter,
                                                 dtype=np.int32))
+                    pers_bin = (pred_phys >= args.li_event_threshold).astype(np.uint8)
+                    for hw in args.area_hw:
+                        area_collect(area_store, area_nmax(pers_bin[None], hw)[0], obs_bin,
+                                     hw, t, seq_counter)
 
             seq_counter += 1   # one test sequence fully processed
 
@@ -261,6 +267,8 @@ def run_persistence_evaluation(args):
     npz_payload["n_sequences"] = np.array(seq_counter)
     pr_npz = os.path.join(args.output_dir, "persistence_pr_curves.npz")
     np.savez_compressed(pr_npz, **npz_payload)
+    if area_store:
+        save_area_outputs(args.output_dir, "persistence", area_store)
     logger.info(f"Persistence PR + calibration curves -> {pr_npz}")
 
     # ── Build per-step CSV rows
@@ -356,6 +364,8 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--num_workers",type=int, default=4)
     p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
+    p.add_argument("--area_hw", nargs="*", type=int, default=[2, 3, 6, 13, 26],
+                   help="area-probability half-widths in px (3.14 km); empty = off")
     p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
                    default=[0.1, 0.3, 0.5])
     args = p.parse_args()

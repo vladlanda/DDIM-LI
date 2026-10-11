@@ -15,6 +15,12 @@
 >    CNN-conditioned diffusion model (frozen CNN probability as extra input channel, zero-init,
 >    from the v2 EMA checkpoint; --cnn_cond_checkpoint/--init_from) and keep it only if it
 >    matches CNN AP on validation AND adds value (area/event probabilities, spread, FSS).
+>    RESULT (48 val seqs, M50): conditioned beats unconditioned at every lead (+0.004..+0.046 AP)
+>    but trails CNN (-0.022..-0.051 AP; Brier 3-5% worse). Area probability (any lightning within
+>    6/9/19 km): CNN neighbourhood-max has higher AP (+0.02..+0.04) but is biased low (fbias
+>    0.75-0.92); CNN-independence biased high (2-3.9); diffusion calibrated (0.94-1.02) and wins
+>    Brier at 19 km. Test eval uses the CONDITIONED model; area scores (6-82 km) added to
+>    evaluate.py / evaluate_cnn.py / persistence_baseline.py (npz bootstrap-compatible).
 > 3. [DECIDED 2026-09-29: OFF by default for all models, config augment_flip; an
 >    ablation can re-enable it] Horizontal (east-west) flip augmentation mirrors the prevailing westward
 >    propagation of Central/West African convective systems. Either disable it or

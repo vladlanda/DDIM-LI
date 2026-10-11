@@ -56,6 +56,7 @@ from sklearn.metrics import auc as _auc
 
 try:
     from evaluate import lightning_skill_curve, fss, fss_parts, fss_aggregate, pooled_categorical_scores
+    from evaluate import AREA_HW, area_nmax, area_p_indep, area_collect, save_area_outputs
 except ImportError:
     lightning_skill_curve = fss = None
 
@@ -93,6 +94,8 @@ def parse_args():
     p.add_argument("--li_event_threshold", type=float, default=0.5 / 255.0)
     p.add_argument("--fss_prob_thresholds", nargs="+", type=float,
                    default=[0.1, 0.3, 0.5])
+    p.add_argument("--area_hw", nargs="*", type=int, default=[2, 3, 6, 13, 26],
+                   help="area-probability half-widths in px (3.14 km); empty = off")
     p.add_argument("--fss_scales", nargs="+", type=int,
                    default=[1, 2, 4, 8, 16, 32],
                    help="FSS neighbourhood half-widths in pixels, matching "
@@ -379,6 +382,7 @@ def main():
         for thr in args.fss_prob_thresholds
     }
     seq_counter = 0
+    area_nmax_store, area_indep_store = {}, {}
 
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="CNN baseline eval", dynamic_ncols=True):
@@ -413,7 +417,17 @@ def main():
                     pr_probs[t].append(flat_p)
                     pr_labels[t].append(flat_o)
                     pr_seqids[t].append(np.full(flat_p.shape, seq_counter + b, dtype=np.int32))
+                    # Area probability: a per-pixel model must approximate it --
+                    # neighbourhood max (lower bound) or pixel independence (upper bound).
+                    for hw in args.area_hw:
+                        area_collect(area_nmax_store, area_nmax(p[None], hw)[0], o, hw, t, seq_counter + b)
+                        area_collect(area_indep_store, area_p_indep(p[None], hw)[0], o, hw, t, seq_counter + b)
             seq_counter += B
+
+    if area_nmax_store:
+        save_area_outputs(args.output_dir, "cnn_nmax", area_nmax_store)
+        save_area_outputs(args.output_dir, "cnn_indep", area_indep_store)
+        logger.info(f"Area-probability samples -> {args.output_dir}/area_cnn_*_r*px.npz")
 
     auc_by_step, pr_curves = {}, {}
     for t in range(T_out):

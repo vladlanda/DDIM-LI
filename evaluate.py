@@ -464,6 +464,66 @@ def fss(
     return float(1.0 - mse / mse_ref)
 
 
+# ===================================================================
+# Area / event probability: P(any lightning within a (2hw+1)^2 square)
+# ===================================================================
+AREA_HW     = [2, 3, 6, 13, 26]   # half-widths in pixels (3.14 km): ~6, 9, 19, 41, 82 km
+AREA_STRIDE = 4                   # ponytail: neighbourhood fields are smooth; keep every 4th px per axis
+                                  # (4096 px/image, same count as the per-pixel PR samples)
+
+
+def area_nmax(a, hw):
+    """Neighbourhood maximum over a (2hw+1)^2 square on the last two axes."""
+    from scipy.ndimage import maximum_filter
+    k = 2 * hw + 1
+    return maximum_filter(a, size=(1,) * (a.ndim - 2) + (k, k), mode="constant", cval=0)
+
+
+def area_p_indep(p, hw):
+    """P(any event in the square) if pixels were INDEPENDENT with probabilities p."""
+    from scipy.ndimage import uniform_filter
+    k = 2 * hw + 1
+    logq = np.log1p(-np.clip(p, 0, 1 - 1e-6))
+    size = (1,) * (p.ndim - 2) + (k, k)          # never filter across a batch axis
+    return 1.0 - np.exp(uniform_filter(logq, size=size, mode="constant", cval=0.0) * k * k)
+
+
+def area_collect(store, area_prob, obs_bin, hw, t, seq_id):
+    """Append one (H,W) area-probability map and its area label (any obs event in the
+    square) to store[hw][t] = (probs, labels, seqids), on the AREA_STRIDE grid."""
+    S = AREA_STRIDE
+    lab = area_nmax(np.asarray(obs_bin, np.uint8)[None], hw)[0, ::S, ::S].ravel()
+    pr = np.asarray(area_prob, np.float32)[::S, ::S].ravel()
+    p_, l_, s_ = store.setdefault(hw, {}).setdefault(t, ([], [], []))
+    p_.append(pr); l_.append(lab); s_.append(np.full(pr.shape, seq_id, np.int32))
+
+
+def save_area_outputs(out_dir, name, store):
+    """One npz per radius in the SAME schema as the per-pixel PR samples
+    (pr_steps / pr_prob_t / pr_label_t / pr_seqid_t), so bootstrap_pr_auc_ci.py works on
+    them unchanged; plus area_<name>.csv with AP / Brier / frequency bias per radius, lead."""
+    import os, csv
+    from sklearn.metrics import average_precision_score
+    rows = []
+    for hw, per_t in sorted(store.items()):
+        payload = {"pr_steps": np.array(sorted(per_t))}
+        for t, (p_, l_, s_) in sorted(per_t.items()):
+            pr, lb = np.concatenate(p_), np.concatenate(l_).astype(np.int32)
+            payload[f"pr_prob_{t}"], payload[f"pr_label_{t}"] = pr, lb
+            payload[f"pr_seqid_{t}"] = np.concatenate(s_)
+            base = lb.mean()
+            rows.append(dict(model=name, radius_km=round(hw * 3.14, 1), lead_step=t,
+                             ap=float(average_precision_score(lb, pr)) if 0 < lb.sum() < lb.size else np.nan,
+                             brier=float(((np.clip(pr, 0, 1) - lb) ** 2).mean()),
+                             freq_bias=float(np.clip(pr, 0, 1).mean() / base) if base > 0 else np.nan,
+                             base_rate=float(base)))
+        np.savez_compressed(os.path.join(out_dir, f"area_{name}_r{hw}px.npz"), **payload)
+    if rows:
+        with open(os.path.join(out_dir, f"area_{name}.csv"), "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+    return rows
+
+
 def spread_skill(
     ens_np: np.ndarray,   # (M, H, W) ensemble members
     tgt_np: np.ndarray,   # (H, W)    observation
@@ -1688,6 +1748,8 @@ def run_test_evaluation(args):
     cal_probs  = {t: [] for t in pr_steps}
     cal_labels = {t: [] for t in pr_steps}
     auc_by_step: dict = {}   # computed after all batches, before CSV row building
+    area_store: dict = {}    # area/event probabilities (any lightning within r)
+    area_hw = list(getattr(args, "area_hw", AREA_HW) or [])
 
     os.makedirs(args.output_dir, exist_ok=True)
     if args.plot:
@@ -1777,6 +1839,12 @@ def run_test_evaluation(args):
                             fss_by_thr_scale_step[thr][s][t].append(
                                 fss_parts(pred_bin_thr, obs_bin, scale=s)
                             )
+
+                    # Area probability from the members' own spatial structure
+                    ens_bin = (ens_phys >= args.li_event_threshold).astype(np.uint8)
+                    for hw in area_hw:
+                        area_collect(area_store, area_nmax(ens_bin, hw).mean(0), obs_bin,
+                                     hw, t, seq_counter)
 
                     if t in pr_steps:
                         flat_prob = pred_prob.ravel()
@@ -2049,6 +2117,9 @@ def run_test_evaluation(args):
             npz_payload[f"cal_prob_{t}"]  = np.concatenate(cal_probs[t])
             npz_payload[f"cal_label_{t}"] = np.concatenate(cal_labels[t])
     np.savez_compressed(npz_path, **npz_payload)
+    if area_store:
+        save_area_outputs(args.output_dir, "diffusion", area_store)
+        logger.info(f"Area-probability samples -> {args.output_dir}/area_diffusion_r*px.npz")
     logger.info(f"Plot data  -> {npz_path}  (use --plot_only to regenerate plots)")
 
     # ---- All plots ----
@@ -2156,6 +2227,8 @@ if __name__ == "__main__":
                    help="Skip inference — reload plot_data.npz from --output_dir "
                         "and regenerate all figures instantly.")
     p.add_argument("--max_plots",     type=int,   default=20)
+    p.add_argument("--area_hw", nargs="*", type=int, default=AREA_HW,
+                   help="area-probability half-widths in px (3.14 km); empty = off")
     p.add_argument("--fss_scales",    nargs="+", type=int,
                    default=[1, 2, 4, 8, 16, 32],
                    help="Neighbourhood half-widths (pixels) for FSS curve")
