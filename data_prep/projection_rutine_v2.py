@@ -143,16 +143,6 @@ def read_afa_records(nc_path):
     return az[first], el[first], totals, int(values.size)
 
 
-# Reference IR grid of the whole dataset (regular lat/lon, 5446 x 5726). LI is ALWAYS
-# projected onto it -- not onto each IR file's own grid -- because from 2026 the IR files
-# arrive on a slightly different grid; pipeline_v2 resamples those IR images onto this
-# same reference grid, so IR and LI stay pixel-aligned and identical in geometry to the
-# training data. (For 2024-25 files this is exactly their own grid: no change.)
-REF_SHAPE = (5446, 5726)
-REF_WLD = {"x_size": 0.0283895028, "y_size": -0.0283895028,
-           "x_luc": -81.2613107277, "y_luc": 77.3062621236}
-
-
 def read_wld(wld_path):
     with open(wld_path) as f:
         v = [float(line.strip()) for line in f if line.strip()]
@@ -246,8 +236,10 @@ def main():
             if os.path.isfile(out) and not args.overwrite:
                 continue
             try:
+                with Image.open(jpg) as im:
+                    shape = (im.size[1], im.size[0])
                 az, el, values, n_rec = read_afa_records(unzip_nc(zip_path))
-                grid, st = project_to_grid(az, el, values, REF_WLD, REF_SHAPE, n_rec)
+                grid, st = project_to_grid(az, el, values, read_wld(wld_path), shape, n_rec)
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 Image.fromarray(grid, mode="L").save(out)
                 totals["files"] += 1
