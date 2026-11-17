@@ -863,6 +863,11 @@ def make_test_loader(
     giving independent CRPS/CSI samples and honest confidence intervals.
     """
     stride = T_in + T_out   # e.g. 6+36=42 — full sequence length
+    # Optional thinning for long test periods: keep every k-th non-overlapping sequence.
+    # An environment variable (not a CLI flag) so EVERY evaluator -- diffusion, CNN,
+    # LightGBM, persistence, optical flow -- sees the identical subset and the paired
+    # bootstrap stays valid. Unset = all sequences.
+    every = int(os.environ.get("TEST_SEQ_EVERY", "1"))
 
     test_ds = MultiRegionDataset(
         test_roots, channel_list=channel_list,
@@ -876,12 +881,13 @@ def make_test_loader(
     # Apply non-overlapping stride per region dataset
     total_before = sum(len(ds.valid_sequences) for ds in test_ds.datasets)
     for ds in test_ds.datasets:
-        ds.valid_sequences = ds.valid_sequences[::stride]
+        ds.valid_sequences = ds.valid_sequences[::stride][::every]
     total_after = sum(len(ds.valid_sequences) for ds in test_ds.datasets)
 
     logger.info(
         f"Test loader: {total_before} → {total_after} sequences "
         f"after non-overlapping stride={stride} (T_in={T_in} + T_out={T_out})"
+        + (f", keeping every {every}th (TEST_SEQ_EVERY)" if every > 1 else "")
     )
 
     # Rebuild _ConcatDS lengths after stride
