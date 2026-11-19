@@ -868,6 +868,10 @@ def make_test_loader(
     # LightGBM, persistence, optical flow -- sees the identical subset and the paired
     # bootstrap stays valid. Unset = all sequences.
     every = int(os.environ.get("TEST_SEQ_EVERY", "1"))
+    # Which of the `every` interleaved subsets (0..every-1): run offsets 0 and 1 on two
+    # GPUs for the two halves; merge_eval_halves.py joins them back into one result.
+    offset = int(os.environ.get("TEST_SEQ_OFFSET", "0"))
+    assert 0 <= offset < every, f"TEST_SEQ_OFFSET={offset} must be in [0, TEST_SEQ_EVERY={every})"
 
     test_ds = MultiRegionDataset(
         test_roots, channel_list=channel_list,
@@ -881,13 +885,13 @@ def make_test_loader(
     # Apply non-overlapping stride per region dataset
     total_before = sum(len(ds.valid_sequences) for ds in test_ds.datasets)
     for ds in test_ds.datasets:
-        ds.valid_sequences = ds.valid_sequences[::stride][::every]
+        ds.valid_sequences = ds.valid_sequences[::stride][offset::every]
     total_after = sum(len(ds.valid_sequences) for ds in test_ds.datasets)
 
     logger.info(
         f"Test loader: {total_before} → {total_after} sequences "
         f"after non-overlapping stride={stride} (T_in={T_in} + T_out={T_out})"
-        + (f", keeping every {every}th (TEST_SEQ_EVERY)" if every > 1 else "")
+        + (f", keeping subset {offset} of every {every} (TEST_SEQ_EVERY/TEST_SEQ_OFFSET)" if every > 1 else "")
     )
 
     # Rebuild _ConcatDS lengths after stride
