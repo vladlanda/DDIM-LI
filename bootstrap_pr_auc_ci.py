@@ -61,6 +61,33 @@ def average_precision(prob, lbl):
 METRICS = {"pr_auc": pr_auc, "ap": average_precision}
 
 
+class _WeightedAP:
+    """Exact average precision of a block-bootstrap resample, without re-sorting.
+
+    A resample that draws sequence s k_s times duplicates its pixels k_s times, which is
+    the same as giving them integer weight k_s. AP is a function of the score order and
+    the weighted cumulative TP / predicted-positive counts at each distinct score, so the
+    sort is done ONCE and each resample costs two cumulative sums (O(N), not O(N log N)
+    plus an N-element gather/concat). Equal to sklearn's average_precision_score on the
+    duplicated sample (checked in test_bootstrap_fast.py)."""
+
+    def __init__(self, prob, lbl, seqid, uniq):
+        o = np.argsort(-np.asarray(prob), kind="mergesort")
+        p = np.asarray(prob)[o]
+        self.y = np.asarray(lbl)[o].astype(np.int64)
+        self.sidx = np.searchsorted(uniq, np.asarray(seqid)[o])       # sequence -> 0..n-1
+        self.ends = np.r_[np.flatnonzero(np.diff(p) != 0), p.size - 1]  # last index of each score
+
+    def __call__(self, w_seq):
+        w = w_seq[self.sidx]
+        tp = np.cumsum(w * self.y)[self.ends]
+        pp = np.cumsum(w)[self.ends]
+        if tp[-1] == 0 or tp[-1] == pp[-1]:
+            return np.nan
+        prec, rec = tp / pp, tp / tp[-1]
+        return float(np.sum(np.diff(rec, prepend=0.0) * prec))
+
+
 def load_run(npz_path):
     """Returns {t: (prob, lbl, seqid)} and the set of lead steps available."""
     data = np.load(npz_path, allow_pickle=True)
@@ -100,6 +127,8 @@ def bootstrap_ci(prob, lbl, seqid, n_boot, rng, paired_with=None, metric=None):
     """
     pr_auc = metric or globals()["pr_auc"]   # default keeps the original trapezoid metric
     uniq = np.unique(seqid)
+    if pr_auc is average_precision:
+        return _bootstrap_ap_fast(prob, lbl, seqid, uniq, n_boot, rng, paired_with)
     idx_by_seq = {s: np.where(seqid == s)[0] for s in uniq}
     point = pr_auc(prob, lbl)
 
@@ -135,6 +164,34 @@ def bootstrap_ci(prob, lbl, seqid, n_boot, rng, paired_with=None, metric=None):
         result["delta_ci_lo"] = dlo
         result["delta_ci_hi"] = dhi
         result["delta_n_boot_valid"] = len(deltas)
+    return result
+
+
+def _bootstrap_ap_fast(prob, lbl, seqid, uniq, n_boot, rng, paired_with):
+    """bootstrap_ci for AP via _WeightedAP: same resampling scheme, same outputs."""
+    ap1 = _WeightedAP(prob, lbl, seqid, uniq)
+    if paired_with is not None:
+        if not np.array_equal(uniq, np.unique(paired_with[2])):
+            raise ValueError("Sequence ID sets differ between the two runs being paired "
+                             "-- they must come from evaluating the SAME test sequences.")
+        ap2 = _WeightedAP(*paired_with, uniq)
+    vals, deltas = [], []
+    for _ in range(n_boot):
+        w = np.bincount(rng.integers(0, uniq.size, uniq.size), minlength=uniq.size)
+        v = ap1(w)
+        if np.isfinite(v):
+            vals.append(v)
+        if paired_with is not None:
+            v2 = ap2(w)
+            if np.isfinite(v) and np.isfinite(v2):
+                deltas.append(v - v2)
+    point = average_precision(prob, lbl)
+    lo, hi = (np.percentile(vals, [2.5, 97.5]) if vals else (np.nan, np.nan))
+    result = {"point": point, "ci_lo": lo, "ci_hi": hi, "n_boot_valid": len(vals)}
+    if paired_with is not None:
+        dlo, dhi = (np.percentile(deltas, [2.5, 97.5]) if deltas else (np.nan, np.nan))
+        result.update(delta_point=point - average_precision(paired_with[0], paired_with[1]),
+                      delta_ci_lo=dlo, delta_ci_hi=dhi, delta_n_boot_valid=len(deltas))
     return result
 
 
