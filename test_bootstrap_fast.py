@@ -15,4 +15,13 @@ for _ in range(20):
     idx = np.concatenate([np.flatnonzero(seqid == s) for s in np.repeat(uniq, w)])
     assert abs(ap(w) - average_precision_score(lbl[idx], prob[idx])) < 1e-12
 assert abs(ap(np.ones(n_seq, int)) - average_precision_score(lbl, prob)) < 1e-12
+# continuous scores (no ties) with the top-scored sequence NOT drawn: must equal sklearn, never NaN
+prob_c = rng.random(seqid.size)
+apc = _WeightedAP(prob_c, lbl, seqid, uniq)
+top_seq = seqid[np.argmax(prob_c)]
+for _ in range(20):
+    w = np.bincount(rng.integers(0, n_seq, n_seq), minlength=n_seq); w[top_seq] = 0
+    idx = np.concatenate([np.flatnonzero(seqid == s) for s in np.repeat(uniq, w)])
+    v = apc(w)
+    assert np.isfinite(v) and abs(v - average_precision_score(lbl[idx], prob_c[idx])) < 1e-12
 print("ok")

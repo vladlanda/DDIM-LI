@@ -84,7 +84,10 @@ class _WeightedAP:
         pp = np.cumsum(w)[self.ends]
         if tp[-1] == 0 or tp[-1] == pp[-1]:
             return np.nan
-        prec, rec = tp / pp, tp / tp[-1]
+        # Leading scores whose pixels all got weight 0 (their sequences were not drawn) have
+        # pp == 0: they are absent from the resample, contribute recall step 0, and must not
+        # produce 0/0 = NaN (which would drop the whole resample and bias the CI).
+        prec, rec = tp / np.maximum(pp, 1), tp / tp[-1]
         return float(np.sum(np.diff(rec, prepend=0.0) * prec))
 
 
