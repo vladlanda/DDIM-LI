@@ -124,6 +124,8 @@ def score_baselines(args, batches, stats, channels, li, T_out, device):
     area_models = ("cnn_nmax", "cnn_indep", "persistence_bin")
     area = {m: {hw: [([], []) for _ in range(T_out)] for hw in args.area_hw} for m in area_models}
     S = AREA_STRIDE
+    from evaluate import area_collect, save_area_outputs
+    nmax_store, seq0 = {}, 0      # CNN-max area samples with sequence ids (for recalibrate_area.py)
     with torch.no_grad():
         for batch in tqdm(batches, desc="CNN + persistence", unit="batch"):
             ctx = batch["context"].to(device)
@@ -142,6 +144,16 @@ def score_baselines(args, batches, stats, channels, li, T_out, device):
                     for m, pr in (("cnn_nmax", _nmax(p_cnn, hw)), ("cnn_indep", _p_indep(p_cnn, hw)),
                                   ("persistence_bin", _nmax((last_phys >= thr).astype(np.float32), hw))):
                         area[m][hw][t][0].append(pr[:, ::S, ::S].ravel()); area[m][hw][t][1].append(lab)
+                    nm = _nmax(p_cnn, hw)
+                    for b in range(nm.shape[0]):
+                        area_collect(nmax_store, nm[b], tgt[b, t] >= thr, hw, t, seq0 + b)
+            seq0 += ctx.shape[0]
+
+    if args.area_hw:
+        vdir = args.output.replace(".csv", "") + "_val_area"
+        os.makedirs(vdir, exist_ok=True)
+        save_area_outputs(vdir, "cnn_nmax", nmax_store)
+        print(f"CNN-max validation area samples -> {vdir}/area_cnn_nmax_r*px.npz")
 
     path = args.output.replace(".csv", "") + "_baselines.csv"
     rows = []

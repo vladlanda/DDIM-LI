@@ -56,6 +56,8 @@ def parse_args():
     p.add_argument("--pixel_km", type=float, default=4.0)
     p.add_argument("--dt_min", type=int, default=10)
     p.add_argument("--hour_bin", type=int, default=3)
+    p.add_argument("--min_bin_count", type=int, default=100,
+                   help="reliability diagrams: omit probability bins with fewer samples")
     p.add_argument("--region_lon", nargs="+", type=float, default=None,
                    help="Centre longitude per test region (same order as "
                         "test_roots) -> hours shown as LOCAL SOLAR time "
@@ -209,7 +211,10 @@ def calibration_analysis(runs, T_out, args, rng):
             rows.append(row)
             try:
                 frac, mean = calibration_curve(lbl, prob, n_bins=10, strategy="uniform")
-                curves[(name, t)] = (mean, frac)
+                # same bin assignment as calibration_curve (uniform, 10 bins); it drops empty bins
+                cnt = np.bincount(np.searchsorted(np.linspace(0, 1, 11)[1:-1], prob), minlength=10)
+                keep = cnt[cnt > 0] >= args.min_bin_count
+                curves[(name, t)] = (mean[keep], frac[keep])
             except ValueError:
                 pass
     return rows, curves
@@ -247,6 +252,10 @@ def grouped_analysis(meta, runs, T_out, groups, label, args, rng):
     return rows
 
 
+def month_groups(meta):
+    return [str(s)[:7] for s in meta["seq_time_utc"]]          # "YYYY-MM"
+
+
 def hour_groups(meta, args):
     hrs = np.array([int(s[11:13]) + int(s[14:16]) / 60 for s in meta["seq_time_utc"]])
     if args.region_lon:
@@ -255,7 +264,8 @@ def hour_groups(meta, args):
 
 
 # ---------------------------------------------------------- figures
-def make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, args, runs, T_out):
+def make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, args, runs, T_out,
+                 month_rows=()):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -315,7 +325,8 @@ def make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, arg
     for rows, key, fname, xlabel in [
         (diurnal_rows, "hour", "figS_diurnal_skill.png",
          "Issue time (local solar h)" if args.region_lon else "Issue time (UTC h)"),
-        (region_rows, "region", "figS_region_skill.png", "Region")]:
+        (region_rows, "region", "figS_region_skill.png", "Region"),
+        (list(month_rows), "month", "figS_month_skill.png", "Month (issue time, UTC)")]:
         if not rows:
             continue
         groups = sorted({r[key] for r in rows}, key=lambda g: (isinstance(g, str), g if not isinstance(g, str) else 0, str(g)))
@@ -360,7 +371,14 @@ def main():
                                    "region", args, rng)
     write_csv(os.path.join(args.output_dir, "region_skill.csv"), region_rows)
 
-    make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, args, runs, T_out)
+    print("\n(5) Per month, and per region x month")
+    month_rows = grouped_analysis(meta, runs, T_out, month_groups(meta), "month", args, rng)
+    write_csv(os.path.join(args.output_dir, "month_skill.csv"), month_rows)
+    rm = [f"{names[r]}|{m}" for r, m in zip(meta["seq_region"], month_groups(meta))]
+    rm_rows = grouped_analysis(meta, runs, T_out, rm, "region_month", args, rng)
+    write_csv(os.path.join(args.output_dir, "region_month_skill.csv"), rm_rows)
+
+    make_figures(regime_rows, curves, calib_rows, diurnal_rows, region_rows, args, runs, T_out, month_rows)
 
 
 if __name__ == "__main__":
